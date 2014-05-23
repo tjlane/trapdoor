@@ -1,6 +1,9 @@
+#!/usr/bin/env python
+
 
 """
-
+This file contains all code relating to the "guardian" MPI process
+that actually processes data in real time and operates the shutter.
 
 to do list
 ----------
@@ -8,7 +11,6 @@ to do list
 -- implement the Shutter class
 -- allow xtc data access (single worker proc)
 -- docstringzzzz
-
 
 >> TJL May 2014
 """
@@ -108,12 +110,7 @@ class Thresholder(object):
         return image
 
         
-        
-        
-
-
-
-def main():
+def main(camera_name, adu_threshold, consecutive_threshold, area_threshold):
     
     # setup MPI
     comm = MPI.COMM_WORLD
