@@ -1,0 +1,17 @@
+
+from ..trapdoor.core import *
+
+def reduce_func(update, old):
+    """
+    basic sum
+    """
+    return update + old
+
+    
+def map_func(data):
+    return data
+
+
+buf = np.ones((32, 185, 388))
+mr = MapReducer(map_func, reduce_func, result_buffer=buf)
+mr.start()
