@@ -1,0 +1,17 @@
+#!/usr/bin/env python
+
+# runs 30 & 47 are known to contain ice :)
+
+import sys
+sys.path.append('/reg/neh/home2/tjlane/opt/trapdoor')
+
+from trapdoor import guardian
+
+camera = 'CxiDs1.0:Cspad.0'
+adu_thresh  = 5000
+cons_thresh = 5
+area_thresh = 30
+
+guardian.main(camera, adu_thresh, cons_thresh, area_thresh,
+              source='exp=cxia4113:run=30')
+
