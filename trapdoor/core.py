@@ -13,13 +13,12 @@ import numpy as np
 import psana
 
 
-TYPE_MAP = {np.int     : MPI.INT,
-            np.float32 : MPI.FLOAT,
-            np.float64 : MPI.DOUBLE}
-
+# ----------------------------
+# import & setup MPI env
 
 try:
-    from mpi4py import MPI
+    raise ImportError()
+    #from mpi4py import MPI
 except ImportError as e:
     print 'Could not import mpi4py locally, looking for global version...'
     try:
@@ -28,11 +27,16 @@ except ImportError as e:
         print '... success!'
     except:
         raise ImportError('Could not import mpi4py')
+
+TYPE_MAP = {np.int     : MPI.INT,
+            np.float32 : MPI.FLOAT,
+            np.float64 : MPI.DOUBLE}
         
 COMM = MPI.COMM_WORLD
 MPI_RANK = COMM.Get_rank()
 MPI_SIZE = COMM.Get_size()
 
+# --------------------------
 
 
 class OnlinePsana(object):
@@ -83,7 +87,9 @@ class OnlinePsana(object):
         
     @property
     def role(self):
-        if mpi_rank == 0:
+        if hasattr(self, '_role'):
+            return self._role # this allows us to override for debugging...
+        elif MPI_RANK == 0:
             return 'master'
         else:
             return 'worker'
@@ -91,13 +97,15 @@ class OnlinePsana(object):
             
     @property
     def _source_string(self):
-        raise NotImplementedError()
-        shmem_string = "shmem=0_%d_psana_%s.%d:stop=no" % (i, hutch, j)
-        return shmem_string
+        return 'exp=cxia4113:run=30' # TEMPORARY!
+        #raise NotImplementedError()
+        #shmem_string = "shmem=0_%d_psana_%s.%d:stop=no" % (i, hutch, j)
+        #return shmem_string
     
         
     @property
     def events(self):
+        print 'Accessing data stream: %s' % self._source_string
         ds = psana.DataSource(self._source_string)
         return ds.events()
     
@@ -130,14 +138,15 @@ class MapReducer(OnlinePsana):
         
         
         """
-        
-        self.register_cfg_file(config_file)
+       
+        if config_file: 
+            self.register_cfg_file(config_file)
         
         self.map = map_func
         self.reduce = reduce_func
         self._buffer = None
         
-        if result_buffer:
+        if result_buffer != None:
             self._use_array_comm = True
             self._result = np.zeros_like(result_buffer)
             self._buffer = result_buffer
@@ -150,7 +159,7 @@ class MapReducer(OnlinePsana):
         return
     
         
-    def start(self):
+    def start(self, verbose=False):
         """
         Begin the map-reduce procedure
         """
@@ -163,23 +172,31 @@ class MapReducer(OnlinePsana):
         if self._use_array_comm:
             
             if self.role == 'worker':
+                if verbose: print 'Starting array-enabled worker (r%d)' % MPI_RANK
                 req = None
                 for evt in self.events:
                     result = self.map(evt)
+                    if not type(result) == np.ndarray:
+                        raise TypeError('Output of `map_func` must be a numpy array'
+                                        ' if `result_buffer` is specified! Got: %s'
+                                        '' % type(result))
                     if req: req.Wait() # be sure we're not still sending something
                     req = COMM.Isend(result, dest=0)
                 
             elif self.role == 'master':
+                if verbose: print 'Starting array-enabled master (r%d)' % MPI_RANK
                 self._buffer = np.zeros_like(self._result)
                 while self.running:
                     COMM.Recv(self._buffer, source=MPI.ANY_SOURCE)
                     self._result = self.reduce(self._buffer, self._result)
                     self.num_events += 1
+                    self.process_result()
                     self.check_for_stopsig()
                     
         else:
         
             if self.role == 'worker':
+                if verbose: print 'Starting array-disabled worker (r%d)' % MPI_RANK
                 req = None
                 for evt in self.events:
                     result = self.map(evt)
@@ -187,10 +204,12 @@ class MapReducer(OnlinePsana):
                     req = COMM.isend(result, dest=0)
                 
             elif self.role == 'master':
+                if verbose: print 'Starting array-disabled worker (r%d)' % MPI_RANK
                 while self.running:
                     buf = COMM.recv(source=MPI.ANY_SOURCE)
                     self._result = self.reduce(buf, self._result)
                     self.num_events += 1
+                    self.process_result()
                     self.check_for_stopsig()
                 
 
@@ -202,11 +221,19 @@ class MapReducer(OnlinePsana):
         # not implemented!
         # to do:
         # query remote process & if signal is there, stop()
+
+    def process_result(self):
+        print np.mean(self.result)
+        # haven't quite thought through how the user should interact
+        # with this.... generating plots is one obvious use. But should
+        # the user inject code here or what?
+        return
         
     @property
     def running(self):
         return self._running
-        
+       
+    @property 
     def result(self):
         return self._result
         

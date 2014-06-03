@@ -1,5 +1,8 @@
+#!/usr/bin/env python
 
-from ..trapdoor.core import *
+import sys
+sys.path.append('/reg/neh/home2/tjlane/opt/trapdoor')
+from trapdoor.core import *
 
 def reduce_func(update, old):
     """
@@ -7,11 +10,18 @@ def reduce_func(update, old):
     """
     return update + old
 
-    
-def map_func(data):
-    return data
+
+global camera_src
+camera_src = psana.Source('DetInfo(CxiDs1.0:Cspad.0)')
+
+def map_func(psana_event):
+    cspad = psana_event.get(psana.CsPad.DataV2, camera_src)
+    image = np.vstack([ cspad.quads(i).data() for i in range(4) ])
+    return image
 
 
 buf = np.ones((32, 185, 388))
 mr = MapReducer(map_func, reduce_func, result_buffer=buf)
-mr.start()
+#mr._role = 'master'
+mr.start(verbose=True)
+
