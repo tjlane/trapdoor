@@ -4,10 +4,9 @@
 Core classes for trapdoor
 """
 
-
 import os
 import sys
-import abc
+import time
 import numpy as np
 
 import psana
@@ -47,21 +46,12 @@ class OnlinePsana(object):
     """
     Base class for any online psana app
     """
-        
-    @property
-    def processes(self):
-
-        raise NotImplementedError()
-        
-        if self.role == 'worker':
-            pass
-            
-        elif self.role == 'master':
-            pass
-
-        return
-        
     
+    @property
+    def source(self):
+        return self._source
+    
+        
     def shutdown(self):
         # likely not the best way to do this
         print "shutting down all processes..."
@@ -101,12 +91,21 @@ class OnlinePsana(object):
             
     @property
     def _source_string(self):
-        multicast_mask_map = [1, 2, 4, 8, 16, 32] # these are bits, one for each DSS Node
-        node_number = MPI_RANK / 8
-        multicast_mask = multicast_mask_map[node_number]
-        core_number = MPI_RANK % 8
-        source = 'shmem=4_%d_psana_CXI.%d:stop=no' % (multicast_mask, core_number)
-        return source
+        
+        if self.source == 'cxishmem':
+            
+            multicast_mask_map = [1, 2, 4, 8, 16, 32] # these are bits, one for each DSS Node
+            node_number = MPI_RANK / 8
+            multicast_mask = multicast_mask_map[node_number]
+            
+            core_number = MPI_RANK % 8
+            source_str = 'shmem=4_%d_psana_CXI.%d:stop=no' % (multicast_mask,
+                                                              core_number)
+            
+        else:
+            source_str = self.source
+            
+        return source_str
     
         
     @property
@@ -125,7 +124,7 @@ class MapReducer(OnlinePsana):
     
     def __init__(self, map_func, reduce_func, action_func,
                  result_buffer=None, config_file=None,
-                 source='shmem'):
+                 source='cxishmem'):
                  
         """
         
@@ -150,6 +149,9 @@ class MapReducer(OnlinePsana):
         
         
         """
+        
+        self._source = source
+        self._hutch  = hutch
        
         if config_file: 
             self.register_cfg_file(config_file)
@@ -163,11 +165,10 @@ class MapReducer(OnlinePsana):
             self._use_array_comm = True
             self._result = np.zeros_like(result_buffer)
             self._buffer = result_buffer
-            #self._comm_type = TYPE_MAP[init_result.dtype]
         else:
             self._use_array_comm = False
             
-        self.num_events = 0   
+        self.num_reduced_events = 0   
         
         return
     
@@ -183,57 +184,69 @@ class MapReducer(OnlinePsana):
         # pre-allocating a result buffer and using the mpi4py array API
         
         if self._use_array_comm:
-            
-            if self.role == 'worker':
-                if verbose: print 'Starting array-enabled worker (r%d)' % MPI_RANK
-
-                req = None
-                event_index = 0
-
-                for evt in self.events:
-                    result = self.map(evt)
-                    if not type(result) == np.ndarray:
-                        raise TypeError('Output of `map_func` must be a numpy array'
-                                        ' if `result_buffer` is specified! Got: %s'
-                                        '' % type(result))
-                    if req: req.Wait() # be sure we're not still sending something
-                    req = COMM.Isend(result, dest=0)
-                    event_index += 1
-
-                    if verbose:
-                        if event_index % 50 == 0:
-                            print '%d evts from RANK %d' % (event_index, MPI_RANK)
-               
-                
-            elif self.role == 'master':
-                if verbose: print 'Starting array-enabled master (r%d)' % MPI_RANK
-                self._buffer = np.zeros_like(self._result)
-                while self.running:
-                    COMM.Recv(self._buffer, source=MPI.ANY_SOURCE)
-                    self._result = self.reduce(self._buffer, self._result)
-                    self.num_events += 1
-                    self.action(self._result)
-                    self.check_for_stopsig()
-                    
+            isend = COMM.Isend
+            recv  = COMM.Recv
         else:
+            isend = COMM.isend
+            recv  = COMM.recv
+            
+        # enter loops for both workers and master
         
-            if self.role == 'worker':
-                if verbose: print 'Starting array-disabled worker (r%d)' % MPI_RANK
-                req = None
-                for evt in self.events:
-                    result = self.map(evt)
-                    if req: req.Wait() # be sure we're not still sending something
-                    req = COMM.isend(result, dest=0)
+        # workers loop over events from psana
+        if self.role == 'worker':
+            if verbose: print 'Starting array-enabled worker (r%d)' % MPI_RANK
+
+            req = None
+            event_index = 0
+            
+            start_time = time.time()
+
+            for evt in self.events:
+                if not evt: continue
+
+                result = self.map(evt)
+
+                if not type(result) == np.ndarray and self._use_array_comm:
+                    raise TypeError('Output of `map_func` must be a numpy array'
+                                    ' if `result_buffer` is specified! Got: %s'
+                                    '' % type(result))
+
+                # send the mapped event data to the master process
+                if req: req.Wait() # be sure we're not still sending something
+                req = isend(result, dest=0, tag=0)
+                event_index += 1
+
+                # send the rate of processing to the master process
+                if event_index % 10 == 0:
+                    rate = (time.time() - start_time) / 10.0
+                    start_time= time.time()
+                    isend(rate, dest=0, tag=1)
+
+                if verbose:
+                    if event_index % 100 == 0:
+                        print '%d evts processed on RANK %d' % (event_index, MPI_RANK)
                 
-            elif self.role == 'master':
-                if verbose: print 'Starting array-disabled worker (r%d)' % MPI_RANK
-                while self.running:
-                    buf = COMM.recv(source=MPI.ANY_SOURCE)
-                    self._result = self.reduce(buf, self._result)
-                    self.num_events += 1
-                    self.action(self._result)
-                    self.check_for_stopsig()
+           
+        # master loops continuously, looking for communicated from workers & 
+        #     reduces each of those
+        elif self.role == 'master':
+            if verbose: print 'Starting array-enabled master (r%d)' % MPI_RANK
+            
+            if self._use_array_comm:
+                self._buffer = np.zeros_like(self._result)
+            
+            while self.running:
+                recv(self._buffer, source=MPI.ANY_SOURCE, tag=0)
+                self._result = self.reduce(self._buffer, self._result)
+                self.num_reduced_events += 1
+                self.action(self._result)
+                self.check_for_stopsig()
                 
+                # this will get all the rate data from the workers and print it
+                if self.num_reduced_events % 120 == 0:
+                    self.tachometer(verbose=True)
+                
+        return                  
 
     def stop(self):
         self._running = False
@@ -251,6 +264,37 @@ class MapReducer(OnlinePsana):
     @property 
     def result(self):
         return self._result
+        
+        
+    def tachometer(self, verbose=True):
+        """
+        Gather the rate of data processing from all worker processes and, if
+        `verbose`, display it.
+        """
+        
+        rates = [ COMM.recv(source=i, tag=1) for i in range(1, MPI_SIZE) ]
+        mean_rate = np.mean(rates)
+        total_rate = np.sum(rates)
+        
+        if verbose:
+            
+            msg = [
+            '\r',
+            '>>      TACHOMETER',
+            '------------------']
+            for i in range(1, MPI_SIZE):
+                msg.append( 'Rank %d :: %.2f Hz' % (i, rates[i]) )
+            msg.extend([
+            '------------------',
+            'Mean:      %.2f Hz' % mean_rate,
+            'Total:     %.2f Hz' % total_rate,
+            '------------------',
+            ''])
+            
+            msg = '\n'.join(msg)
+            print msg,
+        
+        return
         
     
     

@@ -72,13 +72,21 @@ def accumulate_damage(new, old):
 
 # action_func
 class ShutterControl(object):
+    """
+    Note that currently the shutter control is operated by two PVs, each
+    mapping to a separate subroutine housed on the pulse-picker motor.
+
+    So to open/close the shutter, we have to set separate to PVs to "1".
+    """
+
     
-    def __init__(self, consecutive_threshold, area_threshold, pv=''):
+    def __init__(self, consecutive_threshold, area_threshold):
 
         self.consecutive_threshold = consecutive_threshold
         self.area_threshold = area_threshold
-        self.pv = epics.PV(pv)
-        self._pv_str = pv
+
+        self._close_routine_pv = epics.PV('CXI:ATC:MMS:29:S_CLOSE')
+        self._open_routine_pv  = epics.PV('CXI:ATC:MMS:29:S_OPEN')
 
         return
 
@@ -89,7 +97,7 @@ class ShutterControl(object):
         """
 
         if np.sum( camera_damage_image > self.consecutive_threshold ) > self.area_threshold:
-            if self.status == 1: # dbl check
+            if self.status == 'open': # dbl check
                 print '/n *** THRESHOLD EXCEEDED -- SENDING SHUTTER CLOSE SIG *** \n'
                 self.close()
         
@@ -97,16 +105,50 @@ class ShutterControl(object):
 
     @property
     def status(self):
-        return self.pv.value
+        opn = self._close_routine_pv.status
+        cls = self._open_routine_pv.status
 
-    def close(self):
+        if opn and not cls:
+            s = 'open'
+        elif cls and not opn:
+            s = 'closed'
+        else:
+            s = 'unknown'
+
+        return s
+
+    def close(self, timeout=5.0):
+
         print 'Sending signal to close: %s' % self._pv_str
         self.pv.put(0)
 
-    def open(self):
+        start = time.time()
+        while not self.status == 'closed':
+            elapsed = time.time() - start
+            if elapsed > timeout:
+                print 'WARNING: shutter failed to close in %f seconds' % timeout
+                return False
+
+        print '... shutter closed'
+
+        return True
+
+
+    def open(self, timeout=5.0):
+
         print 'Sending signal to open: %s' % self._pv_str
         self.pv.put(1)
 
+        start = time.time()
+        while not self.status == 'closed':
+            elapsed = time.time() - start
+            if elapsed > timeout:
+                print 'WARNING: shutter failed to open in %f seconds' % timeout
+                return False
+
+        print '... shutter opened'
+
+        return True
 
         
 def main(camera_name, adu_threshold, consecutive_threshold, area_threshold,
@@ -115,8 +157,6 @@ def main(camera_name, adu_threshold, consecutive_threshold, area_threshold,
     camera_damage = np.zeros((32, 185, 388), dtype=np.int32)
     dd = DamageDecider(consecutive_threshold, area_threshold) 
        
-    shmemstring = "shmem=4_1_psana_CXI.0:stop=no"
-
     monitor = MapReducer(binarize, accumulate_damage, dd,
                          result_buffer=camera_damage, source='shmem')
     monitor.start()

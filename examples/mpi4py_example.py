@@ -15,13 +15,14 @@ def main():
     
     if MPI_RANK == 0: # master
     
-        buf = np.zeros(10)
+        #buf = np.zeros(10)
         req = False
         
         while running:
             if req:
                 req.Wait()
-            req = COMM.Irecv(buf, source=MPI.ANY_SOURCE)
+            #req = COMM.Irecv(buf, source=MPI.ANY_SOURCE, tag=1)
+            buf = COMM.recv(source=MPI.ANY_SOURCE, tag=1)
             print 'got message:', buf
             
             
@@ -34,7 +35,7 @@ def main():
             print "%d sending" % MPI_RANK
             if req:
                 req.Wait()
-            req = COMM.Isend(d, dest=0)
+            req = COMM.send(MPI_RANK, dest=0, tag=1)
     
     return
     
