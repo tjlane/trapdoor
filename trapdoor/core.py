@@ -1,4 +1,4 @@
-
+#!/usr/bin/env python
 
 """
 Core classes for trapdoor
@@ -16,17 +16,21 @@ import psana
 # ----------------------------
 # import & setup MPI env
 
-try:
-    raise ImportError()
+#try:
+#    raise ImportError()
     #from mpi4py import MPI
-except ImportError as e:
-    print 'Could not import mpi4py locally, looking for global version...'
-    try:
-        sys.path.insert(1,'/reg/common/package/mpi4py/mpi4py-1.3.1/install/lib/python')
-        from mpi4py import MPI
-        print '... success!'
-    except:
-        raise ImportError('Could not import mpi4py')
+#except ImportError as e:
+#    print 'Could not import mpi4py locally, looking for global version...'
+#    try:
+#        sys.path.insert(1,'/reg/common/package/mpi4py/mpi4py-1.3.1/install/lib/python')
+#        from mpi4py import MPI
+#        print '... success!'
+#    except:
+#        raise ImportError('Could not import mpi4py')
+
+sys.path.insert(1,'/reg/common/package/mpi4py/mpi4py-1.3.1/install/lib/python')
+from mpi4py import MPI
+
 
 TYPE_MAP = {np.int     : MPI.INT,
             np.float32 : MPI.FLOAT,
@@ -97,10 +101,12 @@ class OnlinePsana(object):
             
     @property
     def _source_string(self):
-        return 'exp=cxia4113:run=30' # TEMPORARY!
-        #raise NotImplementedError()
-        #shmem_string = "shmem=0_%d_psana_%s.%d:stop=no" % (i, hutch, j)
-        #return shmem_string
+        multicast_mask_map = [1, 2, 4, 8, 16, 32] # these are bits, one for each DSS Node
+        node_number = MPI_RANK / 8
+        multicast_mask = multicast_mask_map[node_number]
+        core_number = MPI_RANK % 8
+        source = 'shmem=4_%d_psana_CXI.%d:stop=no' % (multicast_mask, core_number)
+        return source
     
         
     @property
@@ -117,8 +123,9 @@ class MapReducer(OnlinePsana):
     """
     
     
-    def __init__(self, map_func, reduce_func, result_buffer=None, 
-                config_file=None, thorough=False, source='shmem'):
+    def __init__(self, map_func, reduce_func, action_func,
+                 result_buffer=None, config_file=None,
+                 source='shmem'):
                  
         """
         
@@ -133,6 +140,11 @@ class MapReducer(OnlinePsana):
             previously stored result, and generates and updated solution. Note
             that powerful and flexible operations can be performed by
             using a class method here...
+
+        action_func : function
+            Function that takes the reduced result and does something
+            with it. Note that you can control computational cost using
+            the `self.num_events` counter.
             
         result_buffer
         
@@ -144,6 +156,7 @@ class MapReducer(OnlinePsana):
         
         self.map = map_func
         self.reduce = reduce_func
+        self.action = action_func
         self._buffer = None
         
         if result_buffer != None:
@@ -173,7 +186,10 @@ class MapReducer(OnlinePsana):
             
             if self.role == 'worker':
                 if verbose: print 'Starting array-enabled worker (r%d)' % MPI_RANK
+
                 req = None
+                event_index = 0
+
                 for evt in self.events:
                     result = self.map(evt)
                     if not type(result) == np.ndarray:
@@ -182,6 +198,12 @@ class MapReducer(OnlinePsana):
                                         '' % type(result))
                     if req: req.Wait() # be sure we're not still sending something
                     req = COMM.Isend(result, dest=0)
+                    event_index += 1
+
+                    if verbose:
+                        if event_index % 50 == 0:
+                            print '%d evts from RANK %d' % (event_index, MPI_RANK)
+               
                 
             elif self.role == 'master':
                 if verbose: print 'Starting array-enabled master (r%d)' % MPI_RANK
@@ -190,7 +212,7 @@ class MapReducer(OnlinePsana):
                     COMM.Recv(self._buffer, source=MPI.ANY_SOURCE)
                     self._result = self.reduce(self._buffer, self._result)
                     self.num_events += 1
-                    self.process_result()
+                    self.action(self._result)
                     self.check_for_stopsig()
                     
         else:
@@ -209,7 +231,7 @@ class MapReducer(OnlinePsana):
                     buf = COMM.recv(source=MPI.ANY_SOURCE)
                     self._result = self.reduce(buf, self._result)
                     self.num_events += 1
-                    self.process_result()
+                    self.action(self._result)
                     self.check_for_stopsig()
                 
 
@@ -222,13 +244,6 @@ class MapReducer(OnlinePsana):
         # to do:
         # query remote process & if signal is there, stop()
 
-    def process_result(self):
-        print np.mean(self.result)
-        # haven't quite thought through how the user should interact
-        # with this.... generating plots is one obvious use. But should
-        # the user inject code here or what?
-        return
-        
     @property
     def running(self):
         return self._running

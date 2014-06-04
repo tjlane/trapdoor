@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 
+import time
 import sys
 sys.path.append('/reg/neh/home2/tjlane/opt/trapdoor')
 from trapdoor.core import *
@@ -15,13 +16,21 @@ global camera_src
 camera_src = psana.Source('DetInfo(CxiDs1.0:Cspad.0)')
 
 def map_func(psana_event):
-    cspad = psana_event.get(psana.CsPad.DataV2, camera_src)
-    image = np.vstack([ cspad.quads(i).data() for i in range(4) ])
+    #cspad = psana_event.get(psana.CsPad.DataV2, camera_src)
+    #if cspad != None:
+    #     image = np.vstack([ cspad.quads(i).data() for i in range(4) ])
+    #else:
+    #     image = np.zeros((32, 185, 388), dtype=np.int)
+    image = np.zeros((32, 185, 388), dtype=np.int)
+    time.sleep(5)
     return image
 
+def action_func(image):
+    #print np.mean(image)
+    return
 
 buf = np.ones((32, 185, 388))
-mr = MapReducer(map_func, reduce_func, result_buffer=buf)
+mr = MapReducer(map_func, reduce_func, action_func, result_buffer=buf)
 #mr._role = 'master'
 mr.start(verbose=True)
 
