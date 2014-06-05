@@ -11,6 +11,7 @@ import psana
 import epics
 import numpy as np
 
+from core import MapReducer
 
 def camera_datatypes(camera_name):
     
@@ -80,13 +81,15 @@ class ShutterControl(object):
     """
 
     
-    def __init__(self, consecutive_threshold, area_threshold):
+    def __init__(self, consecutive_threshold, area_threshold, debug_mode=False):
 
         self.consecutive_threshold = consecutive_threshold
         self.area_threshold = area_threshold
 
         self._close_routine_pv = epics.PV('CXI:ATC:MMS:29:S_CLOSE')
         self._open_routine_pv  = epics.PV('CXI:ATC:MMS:29:S_OPEN')
+
+        self.debug_mode = debug_mode
 
         return
 
@@ -120,7 +123,9 @@ class ShutterControl(object):
     def close(self, timeout=5.0):
 
         print 'Sending signal to close: %s' % self._pv_str
-        self.pv.put(0)
+        if not self.debug_mode:
+            print '(in debug mode...)'
+            self.pv.put(0)
 
         start = time.time()
         while not self.status == 'closed':
@@ -137,7 +142,9 @@ class ShutterControl(object):
     def open(self, timeout=5.0):
 
         print 'Sending signal to open: %s' % self._pv_str
-        self.pv.put(1)
+        if not self.debug_mode:
+            print '(in debug mode...)'
+            self.pv.put(1)
 
         start = time.time()
         while not self.status == 'closed':
@@ -151,26 +158,24 @@ class ShutterControl(object):
         return True
 
         
-def main(camera_name, adu_threshold, consecutive_threshold, area_threshold,
-         source='shmem'):
+def main(adu_threshold, consecutive_threshold, area_threshold):
     
-    camera_damage = np.zeros((32, 185, 388), dtype=np.int32)
-    dd = DamageDecider(consecutive_threshold, area_threshold) 
+    camera_buffer = np.zeros((32, 185, 388), dtype=np.int32)
+    cntrl = ShutterControl(consecutive_threshold, area_threshold, debug_mode=True)
        
-    monitor = MapReducer(binarize, accumulate_damage, dd,
-                         result_buffer=camera_damage, source='shmem')
-    monitor.start()
+    monitor = MapReducer(binarize, accumulate_damage, cntrl,
+                         result_buffer=camera_buffer)
+    monitor.start(verbose=False)
     
     return
 
         
 if __name__ == '__main__':
     
-    camera_name           = 'CxiDs1.0:Cspad.0'
     adu_threshold         = 5000
     consecutive_threshold = 5
     area_threshold        = 30
     
-    main(camera_name, adu_threshold, consecutive_threshold, area_threshold)
+    main(adu_threshold, consecutive_threshold, area_threshold)
     
 

@@ -1,3 +1,134 @@
 #!/usr/bin/env python
 
-# this script will be the one that actually gets called
+"""
+"""
+
+import os
+import sys
+import stat
+import argparse
+import datetime
+import subprocess
+
+parser = argparse.ArgumentParser(description='Protect that CSPAD')
+
+parser.add_argument('-n', '--nodes', type=int, default=1,
+                    help='The number of nodes to run (8 cores/node)'
+                         '. Default: 1')
+parser.add_argument('-a', '--adu', type=int, default=10000,
+                    help='The ADU threshold (above this value is "saturated")'
+                         '. Default: 10,000')
+parser.add_argument('-p', '--perc', type=float, default=0.05,
+                    help='The fraction of the detector that needs to be saturated'
+                         'to activate a trip. Default: 0.05')
+parser.add_argument('-c', '--consecutive', type=int, default=5,
+                    help='The number of consecutive shots that show damage'
+                         ' required to trip. Default: 5.')
+parser.add_argument('-x', '--host', type=str, default='daq-cxi-dss07',
+                    help='The host of the MPI process. Default: daq-cxi-dss07')
+
+args = parser.parse_args()
+
+
+# determine the total number of pixels implied by args.perc
+total_cspad_pixels = 32 * 185 * 388
+area_threshold = int( total_cspad_pixels * args.perc )
+
+num_procs = args.nodes * 8
+
+# give the user some output!
+print ''
+print '>>             TRAPDOOR'
+print '           ... starting'
+print '-----------------------'
+print 'nodes:         %d' % args.nodes
+print 'processors:    %d' % num_procs
+print 'host:          %s' % args.host
+print 'ADU tshd:      %d' % args.adu
+print 'Pixel # tshd:  %d' % area_threshold
+print 'Consec tshd:   %d' % args.consecutive
+print '-----------------------' 
+
+
+# we have to jump through some hoops in order to make this work
+# namely, writing a lot of files to disk that we'll clean up later...
+
+trapdoor_dir = os.path.join(os.environ['HOME'], '.trapdoor')
+if not os.path.exists(trapdoor_dir):
+    os.mkdir(trapdoor_dir)
+    print 'Created: %s' % trapdoor_dir
+
+
+# (1) write the script MPI will execute
+mpi_script_path = os.path.join(trapdoor_dir, 'mpi_script.sh')
+
+mpi_script_text = """#!/bin/bash
+
+# THIS IS AN AUTOMATICALLY GENERATED SCRIPT
+# CREATED BY: trapdoor
+# USER:       %s
+# DATE:       %s
+
+pyscript="import sys; sys.path.append('/reg/neh/home2/tjlane/opt/trapdoor'); from trapdoor import guardian; guardian.main(%d, %d, %d)"
+
+source /reg/g/psdm/etc/ana_env.sh
+. /reg/g/psdm/bin/sit_setup.sh
+
+python -c "$pyscript"
+
+""" % (os.environ['USER'],
+       datetime.datetime.now(),
+       args.adu,
+       args.consecutive,
+       area_threshold)
+       
+f = open(mpi_script_path, 'w')
+f.write(mpi_script_text)
+f.close()
+
+# make that script chmod a+x
+st = os.stat(mpi_script_path)
+os.chmod(mpi_script_path, st.st_mode | 0111)
+
+print 'Wrote: %s' % mpi_script_path
+
+
+# (2) write a hostname file that tells MPI where to work
+
+hosts = ['daq-cxi-dss07',
+         'daq-cxi-dss08',
+         'daq-cxi-dss09',
+         'daq-cxi-dss10',
+         'daq-cxi-dss11',
+         'daq-cxi-dss12'] 
+
+hostfile_path = os.path.join(trapdoor_dir, 'hostfile')
+hostfile_txt = '\n'.join( hosts[:args.nodes] ) + '\n'
+
+f = open(hostfile_path, 'w')
+f.write(hostfile_txt)
+f.close()
+
+print 'Wrote: %s' % hostfile_path
+
+
+# (3) shell out the MPI command
+
+try:
+    r = subprocess.check_call(['ssh', args.host, 'hostname'])
+except subprocess.CalledProcessError:
+    print 'RETURN CODE: %d' % r
+    raise IOError('No route to host: %s' % args.host)
+
+cmd = ['ssh', args.host,
+       '/reg/common/package/openmpi/openmpi-1.8/install/bin/mpirun',
+       '-n', str(num_procs),
+       '--hostfile', hostfile_path,
+        mpi_script_path]
+
+print '>> starting MPI'
+print '-----------------------'
+print 'cmd: %s' % ' '.join(cmd)
+r = subprocess.check_call(cmd, stdout=subprocess.PIPE)
+
+

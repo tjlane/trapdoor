@@ -39,6 +39,8 @@ COMM = MPI.COMM_WORLD
 MPI_RANK = COMM.Get_rank()
 MPI_SIZE = COMM.Get_size()
 
+ERASE_LINE = '\x1b[1A\x1b[2K\x1b[1A'
+
 # --------------------------
 
 
@@ -97,10 +99,12 @@ class OnlinePsana(object):
             multicast_mask_map = [1, 2, 4, 8, 16, 32] # these are bits, one for each DSS Node
             node_number = MPI_RANK / 8
             multicast_mask = multicast_mask_map[node_number]
+            #multicast_mask = 8
             
             core_number = MPI_RANK % 8
             source_str = 'shmem=4_%d_psana_CXI.%d:stop=no' % (multicast_mask,
                                                               core_number)
+            print 'RANK %d :: NODE %d :: %s' % (MPI_RANK, node_number, source_str)
             
         else:
             source_str = self.source
@@ -151,7 +155,6 @@ class MapReducer(OnlinePsana):
         """
         
         self._source = source
-        self._hutch  = hutch
        
         if config_file: 
             self.register_cfg_file(config_file)
@@ -168,12 +171,14 @@ class MapReducer(OnlinePsana):
         else:
             self._use_array_comm = False
             
-        self.num_reduced_events = 0   
-        
+        self.num_reduced_events = 0
+        self._tachometer_run_freq    = 120
+        self._tachometer_report_freq = 5
+
         return
     
         
-    def start(self, verbose=False):
+    def start(self, tachometer=True, verbose=False):
         """
         Begin the map-reduce procedure
         """
@@ -186,9 +191,11 @@ class MapReducer(OnlinePsana):
         if self._use_array_comm:
             isend = COMM.Isend
             recv  = COMM.Recv
+            irecv = COMM.Irecv
         else:
             isend = COMM.isend
             recv  = COMM.recv
+            irecv = COMM.irecv
             
         # enter loops for both workers and master
         
@@ -217,10 +224,13 @@ class MapReducer(OnlinePsana):
                 event_index += 1
 
                 # send the rate of processing to the master process
-                if event_index % 10 == 0:
-                    rate = (time.time() - start_time) / 10.0
-                    start_time= time.time()
-                    isend(rate, dest=0, tag=1)
+                if tachometer:
+                    if event_index % self._tachometer_report_freq == 0:
+                        rate = float(self._tachometer_report_freq) / (time.time() - start_time)
+                        start_time = time.time()
+                        COMM.isend(rate, dest=0, tag=1)
+                        if verbose:
+                            print 'RANK %d reporting rate: %.2f' % (MPI_RANK, rate)
 
                 if verbose:
                     if event_index % 100 == 0:
@@ -234,17 +244,21 @@ class MapReducer(OnlinePsana):
             
             if self._use_array_comm:
                 self._buffer = np.zeros_like(self._result)
-            
+           
+            req = None 
             while self.running:
-                recv(self._buffer, source=MPI.ANY_SOURCE, tag=0)
+                print '%.2f || Master: %d events' % (time.time(), self.num_reduced_events)
+                if req: req.Wait()
+                req = irecv(self._buffer, source=MPI.ANY_SOURCE, tag=0)
                 self._result = self.reduce(self._buffer, self._result)
                 self.num_reduced_events += 1
                 self.action(self._result)
                 self.check_for_stopsig()
                 
                 # this will get all the rate data from the workers and print it
-                if self.num_reduced_events % 120 == 0:
-                    self.tachometer(verbose=True)
+                if tachometer:
+                    if self.num_reduced_events % self._tachometer_run_freq == 0:
+                        self.tachometer(verbose=True)
                 
         return                  
 
@@ -271,27 +285,32 @@ class MapReducer(OnlinePsana):
         Gather the rate of data processing from all worker processes and, if
         `verbose`, display it.
         """
-        
-        rates = [ COMM.recv(source=i, tag=1) for i in range(1, MPI_SIZE) ]
+        sample = np.random.choice(np.arange(1, MPI_SIZE), min(MPI_SIZE, 8))
+        rates = [ COMM.recv(source=i, tag=1) for i in sample ]
         mean_rate = np.mean(rates)
         total_rate = np.sum(rates)
         
         if verbose:
             
             msg = [
-            '\r',
+            '>>           shmem',
             '>>      TACHOMETER',
             '------------------']
             for i in range(1, MPI_SIZE):
-                msg.append( 'Rank %d :: %.2f Hz' % (i, rates[i]) )
+                msg.append( 'Rank %d :: %.2f Hz' % (i, rates[i-1]) )
             msg.extend([
             '------------------',
             'Mean:      %.2f Hz' % mean_rate,
             'Total:     %.2f Hz' % total_rate,
             '------------------',
             ''])
+
+            if not hasattr(self, '_printed_tachometer_buffer'):
+                print '\n' * len(msg) * 4
+                self._printed_tachometer_buffer = True
             
-            msg = '\n'.join(msg)
+            prefix = ERASE_LINE * len(msg)
+            msg = prefix + '\n'.join(msg)
             print msg,
         
         return
