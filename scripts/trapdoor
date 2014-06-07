@@ -93,23 +93,14 @@ os.chmod(mpi_script_path, st.st_mode | 0111)
 print 'Wrote: %s' % mpi_script_path
 
 
-# (2) write a hostname file that tells MPI where to work
-
+# (2) select hsots that are available for running jobs
+# NOTE: right now this is hardwired for CXI
 hosts = ['daq-cxi-dss07',
          'daq-cxi-dss08',
          'daq-cxi-dss09',
          'daq-cxi-dss10',
          'daq-cxi-dss11',
          'daq-cxi-dss12'] 
-
-hostfile_path = os.path.join(trapdoor_dir, 'hostfile')
-hostfile_txt = '\n'.join( hosts[:args.nodes] ) + '\n'
-
-f = open(hostfile_path, 'w')
-f.write(hostfile_txt)
-f.close()
-
-print 'Wrote: %s' % hostfile_path
 
 
 # (3) shell out the MPI command
@@ -123,7 +114,7 @@ except subprocess.CalledProcessError:
 cmd = ['ssh', args.host,
        '/reg/common/package/openmpi/openmpi-1.8/install/bin/mpirun',
        '-n', str(num_procs),
-       '--hostfile', hostfile_path,
+       '--host', ' '.join(hosts[:args.nodes]),
         mpi_script_path]
 
 print '>> starting MPI'

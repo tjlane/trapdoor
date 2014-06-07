@@ -1,0 +1,8 @@
+#!/bin/bash
+ssh daq-cxi-dss07 /reg/g/pcds/dist/pds/tools/procmgr/procmgr restart /reg/g/pcds/dist/pds/cxi/scripts/cxi.cnf monshmsrv_psana_1
+ssh daq-cxi-dss08 /reg/g/pcds/dist/pds/tools/procmgr/procmgr restart /reg/g/pcds/dist/pds/cxi/scripts/cxi.cnf monshmsrv_psana_2
+ssh daq-cxi-dss09 /reg/g/pcds/dist/pds/tools/procmgr/procmgr restart /reg/g/pcds/dist/pds/cxi/scripts/cxi.cnf monshmsrv_psana_3
+ssh daq-cxi-dss10 /reg/g/pcds/dist/pds/tools/procmgr/procmgr restart /reg/g/pcds/dist/pds/cxi/scripts/cxi.cnf monshmsrv_psana_4
+ssh daq-cxi-dss11 /reg/g/pcds/dist/pds/tools/procmgr/procmgr restart /reg/g/pcds/dist/pds/cxi/scripts/cxi.cnf monshmsrv_psana_5
+ssh daq-cxi-dss12 /reg/g/pcds/dist/pds/tools/procmgr/procmgr restart /reg/g/pcds/dist/pds/cxi/scripts/cxi.cnf monshmsrv_psana_6
+

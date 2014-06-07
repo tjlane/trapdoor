@@ -6,7 +6,10 @@ Core classes for trapdoor
 
 import os
 import sys
+import re
 import time
+import socket
+from glob import glob
 import numpy as np
 
 import psana
@@ -96,12 +99,28 @@ class OnlinePsana(object):
         
         if self.source == 'cxishmem':
             
-            multicast_mask_map = [1, 2, 4, 8, 16, 32] # these are bits, one for each DSS Node
             node_number = MPI_RANK / 8
-            multicast_mask = multicast_mask_map[node_number]
-            #multicast_mask = 8
-            
             core_number = MPI_RANK % 8
+
+            # determine the multicast_mask by looking in /dev/shm
+            shm_srvs = glob('/dev/shm/*psana*')
+            if len(shm_srvs) == 1:
+                shm_srv = shm_srvs[0]
+            elif len(shm_srvs) == 0:
+                raise IOError('Could not find a shm server access file in '
+                              '/dev/shm on host: %s' % socket.gethostname())
+            else:
+                print 'WARNING: many shm server access files found: %s' % str(shm_srvs)
+                shm_srv = shm_srvs[0]
+                print 'using the first: %s' % shm_srv
+
+            m = re.search('PdsMonitorSharedMemory_(\d)_(\d)_psana_CXI', shm_srv)
+            multicast_mask = int(m.groups()[1])
+            
+            # this was the old way, not so robust...
+            #multicast_mask_map = [1, 2, 4, 8, 16, 32] # these are bits, one for each DSS Node
+            #multicast_mask = multicast_mask_map[node_number]
+
             source_str = 'shmem=4_%d_psana_CXI.%d:stop=no' % (multicast_mask,
                                                               core_number)
             print 'RANK %d :: NODE %d :: %s' % (MPI_RANK, node_number, source_str)
@@ -172,7 +191,7 @@ class MapReducer(OnlinePsana):
             self._use_array_comm = False
             
         self.num_reduced_events = 0
-        self._tachometer_run_freq    = 120
+        self._tachometer_run_freq    = 50
         self._tachometer_report_freq = 5
 
         return
@@ -247,7 +266,7 @@ class MapReducer(OnlinePsana):
            
             req = None 
             while self.running:
-                print '%.2f || Master: %d events' % (time.time(), self.num_reduced_events)
+                #print '%.2f || Master: %d events' % (time.time(), self.num_reduced_events)
                 if req: req.Wait()
                 req = irecv(self._buffer, source=MPI.ANY_SOURCE, tag=0)
                 self._result = self.reduce(self._buffer, self._result)
@@ -285,7 +304,11 @@ class MapReducer(OnlinePsana):
         Gather the rate of data processing from all worker processes and, if
         `verbose`, display it.
         """
-        sample = np.random.choice(np.arange(1, MPI_SIZE), min(MPI_SIZE, 8))
+
+        # the first is better (no replacement), but not avail in np 1.6.X
+        #sample = np.random.choice(np.arange(1, MPI_SIZE), min(MPI_SIZE, 8))
+        sample = np.random.randint(1, MPI_SIZE, min(MPI_SIZE, 8))
+
         rates = [ COMM.recv(source=i, tag=1) for i in sample ]
         mean_rate = np.mean(rates)
         total_rate = np.sum(rates)

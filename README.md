@@ -11,9 +11,4 @@ trapdoor
 
 Immediate To Do
 
-* Test MapReduce class and ensure it works as intended 
-* re-write guaridan.py to use MR class
-* test/develop protocol for ice detection
-* test shutter controls
-* provide a good CLI for starting guardian w/different params 
-
+* fix issue where output from `trapdoor` script does not propogate back to main terminal
