@@ -4,6 +4,8 @@ import sys
 import numpy as np
 import epics
 
+import psana
+
 sys.path.append('/reg/neh/home2/tjlane/opt/trapdoor')
 from trapdoor import core
 
@@ -28,8 +30,8 @@ class Projector(object):
             The number of bins to employ. If `None` guesses a good value.
         """
 
-        self.coordinate_values = enforce_raw_img_shape(coordinate_values)
-        self.mask = enforce_raw_img_shape(mask).astype(np.int)
+        self.coordinate_values = coordinate_values
+        self.mask = mask.astype(np.int)
         self.n_bins = n_bins
 
         # figure out the number of bins to use
@@ -67,8 +69,6 @@ class Projector(object):
         bin_values : ndarray, int
             The average intensity in the bin.
         """
-
-        image = enforce_raw_img_shape(image)
 
         if not (image.shape == self.coordinate_values.shape):
             raise ValueError('`image` and `coordinate_values` must have the same shape')
@@ -110,15 +110,15 @@ class SpectrometerAnalyzer(object):
         self._exs_E0   = epics.caget('CXI:EXS:CNTL.F')
         self._exs_y0   = epics.caget('CXI:EXS:CNTL.G')
         
-        hst_xaxis = exs_E0 + np.arange(nx) * exs_dEdy
+        #hst_xaxis = self._exs_E0 + np.arange(nx) * exs_dEdy
         
         # Calibrated spectrometer energy -- 1024 elements
         
         
         # ---- psana data sources
-        self.dg3_src    = Source('DetInfo(CxiDg3.0:Opal1000.0)')
-        self.ebeam_src  = Source('BldInfo(EBeam)')
-        self.gasdet_src = Source('BldInfo(FEEGasDetEnergy)')
+        self.dg3_src    = psana.Source('DetInfo(CxiDg3.0:Opal1000.0)')
+        self.ebeam_src  = psana.Source('BldInfo(EBeam)')
+        self.gasdet_src = psana.Source('BldInfo(FEEGasDetEnergy)')
         
         # ---- create a projector function to map DG3 images to energy spectra
         self.n_bins = n_bins
@@ -159,15 +159,16 @@ class SpectrometerAnalyzer(object):
         histogram = args[0]
         average_spectrum = args[1]
         
-        self._hst.put(average_spectrum)
+        self._hst_data.put(average_spectrum)
 
         return
         
         
     def _init_projector(self):
         
-        image_shape = hst.get().size
-        print image_shape
+        #image_shape = self._hst_data.get().size
+        image_shape = (1024, 128)
+        print image_shape, np.product(image_shape)
         
         # compute the orthogonal projection of each pixel's position onto
         # a unit vector "s" defined by the rotation angle set
@@ -198,7 +199,7 @@ def main():
     
     monitor = core.MapReducer(spctrm_ana.map,
                               spctrm_ana.reduce,
-                              spctrm_ana.store
+                              spctrm_ana.store,
                               result_buffer=buf,
                               source='cxishmem')
     monitor.start(verbose=False)
