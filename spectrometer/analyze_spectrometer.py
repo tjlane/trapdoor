@@ -1,9 +1,12 @@
 #!/usr/bin/env python
 
 import sys
-import numpy as np
-import epics
+import time
 
+import numpy as np
+from matplotlib import pyplot as plt
+
+import epics
 import psana
 
 sys.path.append('/reg/neh/home2/tjlane/opt/trapdoor')
@@ -19,7 +22,7 @@ Code to analyze the FEL energy spectrum from CXI DG3.
 
 class Projector(object):
     
-    def __init__(self, coordinate_values, mask, n_bins=101):
+    def __init__(self, coordinate_values, mask, n_bins=101, normalize=False):
         """
         Parameters
         ----------
@@ -42,17 +45,22 @@ class Projector(object):
         # figure out the number of bins to use
         if n_bins != None:
             self.n_bins = n_bins
-            self._bin_factor = float(self.n_bins-0.5) / self.coordinate_values.max()
+            #self._bin_factor = float(self.n_bins-0.5) / self.coordinate_values.max()
         else:
-            self._bin_factor = 25.0
-            self.n_bins = (self.coordinate_values.max() * self._bin_factor) + 1
-        
-        self._bin_assignments = np.floor( coordinate_values * self._bin_factor ).astype(np.int32)
-        self._normalization_array = (np.bincount( self._bin_assignments.flatten(),
-                                     weights=self.mask.flatten() ) \
-                                     + 1e-100).astype(np.float)
+            #self._bin_factor = 25.0
+            self.n_bins = (self.coordinate_values.max() * 25.0) + 1 # default
+       
+        coordinate_values -= coordinate_values.min() 
+        coordinate_values /= coordinate_values.max()
+        self._bin_assignments = np.floor( coordinate_values * (self.n_bins-1) ).astype(np.int32)
 
-        #print self.n_bins, self._bin_assignments.max() + 1 
+        if normalize:
+            self._normalization_array = (np.bincount( self._bin_assignments.flatten(),
+                                                      weights=self.mask.flatten() ) \
+                                                              + 1e-100).astype(np.float)
+        else:
+            self._normalization_array = np.ones(self.n_bins)
+
         assert self.n_bins == self._bin_assignments.max() + 1, 'bin mismatch in init'
         self._normalization_array = self._normalization_array[:self.n_bins]
         
@@ -93,9 +101,10 @@ class Projector(object):
     
         return bin_values
 
-    @property
-    def bin_centers(self):
-        return np.arange(self.n_bins) / self._bin_factor
+    #@property
+    #def bin_centers(self):
+    #    return np.arange(self.n_bins) / self._bin_factor
+
 
 class SpectrometerAnalyzer(object):
 
@@ -142,7 +151,7 @@ class SpectrometerAnalyzer(object):
         eventid = psana_event.get(psana.EventId)
         
         # perform the projection
-        energy_spectrum = self.projector(camdata)
+        energy_spectrum = self.projector(camdata.data16())
 
         return energy_spectrum
 
@@ -153,20 +162,24 @@ class SpectrometerAnalyzer(object):
         
         # perform a running average
         sp = float(self.shots_processed)
-        average_spectrum = old * ( (sp-1) / sp ) + new / sp
+        average_spectrum = old.astype(np.float) * ( (sp-1) / sp ) + new.astype(np.float) / sp
         
         # this is just a placeholder for now
         histogram = np.ones(( 10, len(average_spectrum) ))
         
-        return histogram, average_spectrum
+        return average_spectrum
 
 
     # action function
-    def store(self, *args):
+    def store(self, average_spectrum):
 
-        histogram = args[0]
-        average_spectrum = args[1]
-        
+        if self.shots_processed % 10 == 0:
+            ax.cla()
+            ax.set_xlabel('Energy (arb)')
+            ax.set_ylabel('Intensity (ADU)')
+            ax.plot(average_spectrum)
+            plt.draw()
+
         self._hst_data.put(average_spectrum)
 
         return
@@ -174,9 +187,8 @@ class SpectrometerAnalyzer(object):
         
     def _init_projector(self):
         
-        #image_shape = self._hst_data.get().size
-        image_shape = (1024, 128)
-        print image_shape, np.product(image_shape)
+        image_shape = (1024, 1024)
+        #assert np.product(image_shape) == self._hst_data.get().size
         
         # compute the orthogonal projection of each pixel's position onto
         # a unit vector "s" defined by the rotation angle set
@@ -199,6 +211,12 @@ class SpectrometerAnalyzer(object):
 
 
 def main():
+
+    if core.MPI_RANK == 0:
+        plt.ion()
+        plt.figure()
+        global ax
+        ax = plt.subplot(111)
     
     n_bins = 101
     
