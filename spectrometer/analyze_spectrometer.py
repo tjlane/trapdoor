@@ -14,52 +14,59 @@ from trapdoor import core
 Code to analyze the FEL energy spectrum from CXI DG3.
 """
 
+# this code modified from pypad.utils.RadialAverager
+# github.com/tjlane/pypad
 
 class Projector(object):
     
-
     def __init__(self, coordinate_values, mask, n_bins=101):
         """
         Parameters
         ----------
         coordinate_values : np.ndarray (float)
-            For each pixel, this is the value of the pixel along the projection
+            For each pixel, this is the momentum transfer value of that pixel
         mask : np.ndarray (int)
             A boolean (int) saying if each pixel is masked or not
         n_bins : int
             The number of bins to employ. If `None` guesses a good value.
         """
-
+        
         self.coordinate_values = coordinate_values
         self.mask = mask.astype(np.int)
+        
+        if not self.mask.shape == self.coordinate_values.shape:
+            raise ValueError('mask/coordinate_values shape mismatch')
+        
         self.n_bins = n_bins
-
+        
         # figure out the number of bins to use
         if n_bins != None:
             self.n_bins = n_bins
-            self._bin_factor = float(self.n_bins-1) / self.coordinate_values.max()
+            self._bin_factor = float(self.n_bins-0.5) / self.coordinate_values.max()
         else:
             self._bin_factor = 25.0
             self.n_bins = (self.coordinate_values.max() * self._bin_factor) + 1
-
+        
         self._bin_assignments = np.floor( coordinate_values * self._bin_factor ).astype(np.int32)
-        self._normalization_array = (np.bincount( self._bin_assignments.flatten(), weights=self.mask.flatten() ) \
-                                    + 1e-100).astype(np.float)
+        self._normalization_array = (np.bincount( self._bin_assignments.flatten(),
+                                     weights=self.mask.flatten() ) \
+                                     + 1e-100).astype(np.float)
 
-        assert self.n_bins == self._bin_assignments.max() + 1
+        #print self.n_bins, self._bin_assignments.max() + 1 
+        assert self.n_bins == self._bin_assignments.max() + 1, 'bin mismatch in init'
         self._normalization_array = self._normalization_array[:self.n_bins]
-
+        
         return
     
-
     def __call__(self, image):
         """
-        Bin image intensities
+        Bin pixel intensities by their momentum transfer.
         
         Parameters
         ----------            
         image : np.ndarray
             The intensity at each pixel, same shape as pixel_pos
+
 
         Returns
         -------
@@ -70,6 +77,8 @@ class Projector(object):
             The average intensity in the bin.
         """
 
+        image = image
+        
         if not (image.shape == self.coordinate_values.shape):
             raise ValueError('`image` and `coordinate_values` must have the same shape')
         if not (image.shape == self.mask.shape):
@@ -78,16 +87,15 @@ class Projector(object):
         weights = image.flatten() * self.mask.flatten()
         bin_values = np.bincount(self._bin_assignments.flatten(), weights=weights)
         bin_values /= self._normalization_array
-        bin_values /= self._normalization_array
-
-        assert bin_values.shape[0] == self.n_bins
-
+   
+        assert bin_values.shape[0] == self.n_bins, 'bin number mismatch (%d, %d)' \
+                                                   % (bin_values.shape[0], self.n_bins)
+    
         return bin_values
 
     @property
     def bin_centers(self):
         return np.arange(self.n_bins) / self._bin_factor
-
 
 class SpectrometerAnalyzer(object):
 
