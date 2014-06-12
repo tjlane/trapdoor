@@ -5,13 +5,23 @@
 import sys
 sys.path.append('/reg/neh/home2/tjlane/opt/trapdoor')
 
+import numpy as np
+
 from trapdoor import guardian
+from trapdoor import core
 
-camera = 'CxiDs1.0:Cspad.0'
-adu_thresh  = 5000
 cons_thresh = 5
-area_thresh = 30
+area_thresh = 10000
 
-guardian.main(camera, adu_thresh, cons_thresh, area_thresh,
-              source='exp=cxia4113:run=30')
+# use trapdoor.guardian but inject a new source
+camera_buffer = np.zeros((32, 185, 388), dtype=np.int32)
+cntrl = guardian.ShutterControl(cons_thresh, area_thresh, debug_mode=True)
+
+monitor = core.MapReducer(guardian.binarize, guardian.accumulate_damage, cntrl,
+                          result_buffer=camera_buffer,
+                          source='exp=cxia4113:run=30')
+monitor.start(verbose=False)
+
+
+
 

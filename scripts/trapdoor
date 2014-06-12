@@ -114,7 +114,7 @@ except subprocess.CalledProcessError:
 cmd = ['ssh', args.host,
        '/reg/common/package/openmpi/openmpi-1.8/install/bin/mpirun',
        '-n', str(num_procs),
-       '--host', ' '.join(hosts[:args.nodes]),
+       '--host', ','.join(hosts[:args.nodes]),
         mpi_script_path]
 
 print '>> starting MPI'

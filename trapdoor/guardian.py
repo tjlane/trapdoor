@@ -6,6 +6,7 @@ This file contains all code relating to the "guardian" MPI process
 that actually processes data in real time and operates the shutter.
 """
 
+import time
 
 import psana
 import epics
@@ -52,6 +53,9 @@ def binarize(psana_event, adu_threshold=10000):
     """
 
     cspad = psana_event.get(psana.CsPad.DataV2, camera_src)
+    if not cspad:
+        return np.zeros((32, 185, 388), dtype=np.int32)
+
     image = np.vstack([ cspad.quads(i).data() for i in range(4) ])
         
     above_indicies = (image > adu_threshold)
@@ -65,9 +69,15 @@ def binarize(psana_event, adu_threshold=10000):
 
 # reduce_func
 def accumulate_damage(new, old):
+
     assert new.shape == old.shape, 'shape mismatch in reduce'
+
     x = new + old
-    x[ x < 0 ] = 0
+
+    # same as : x[ x < 0 ] = 0, but faster
+    x += np.abs(x)
+    x /= 2
+
     return x
 
 
@@ -99,11 +109,25 @@ class ShutterControl(object):
         open or closed
         """
 
-        if np.sum( camera_damage_image > self.consecutive_threshold ) > self.area_threshold:
-            if self.status == 'open': # dbl check
-                print '/n *** THRESHOLD EXCEEDED -- SENDING SHUTTER CLOSE SIG *** \n'
-                self.close()
-        
+        s = time.time()
+
+        num_overloaded_pixels = np.sum( camera_damage_image > self.consecutive_threshold )
+        #num_overloaded_pixels = np.sum( (camera_damage_image / self.consecutive_threshold).astype(np.int) )
+
+        if num_overloaded_pixels > self.area_threshold:
+            print ''
+            print '*** THRESHOLD EXCEEDED -- SENDING SHUTTER CLOSE SIG ***'
+            print '%d pixels over threshold (%d)' % (num_overloaded_pixels, self.area_threshold)
+            print ''
+
+        # NOTE: the status query is VERY slow right now -- ~10 seconds :(
+        # may be faster on different machines tho
+        #    if self.status == 'open': # dbl check
+        #        print '/n *** THRESHOLD EXCEEDED -- SENDING SHUTTER CLOSE SIG *** \n'
+        #        self.close()
+
+        #print 'completed action (%.3f s)' % (time.time() - s)
+
         return
 
     @property
