@@ -1,3 +1,0 @@
-#!/bin/bash
-/reg/common/package/openmpi/openmpi-1.8/install/bin/mpirun -n 8 --hostfile hostfile /reg/neh/home2/tjlane/opt/trapdoor/cxi/shm_cxi.sh
-

@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 
 """
+This script provides a CLI to the guardian program.
 """
 
 import os
