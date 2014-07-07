@@ -18,6 +18,7 @@ def camera_datatypes(camera_name):
     
     d = {'name' : 'type',
          'CxiDsd.0:Cspad.0' : psana.ndarray_float32_3,
+         'CxiDs2.0:Cspad.0' : psana.ndarray_float32_3,
          'CxiDs1.0:Cspad.0' : psana.CsPad.DataV2 #psana.ndarray_float32_3
         }
     
@@ -28,13 +29,12 @@ def camera_datatypes(camera_name):
         return
 
 
-            
-        
-# this is the "map"
+# these globals are nasty, but should save a lot of time
+global ds1_src
+ds1_src = psana.Source('DetInfo(CxiDs1.0:Cspad.0)')
 
-# need to add both cameras (!)
-global camera_src
-camera_src = psana.Source('DetInfo(CxiDs1.0:Cspad.0)')
+global ds2_src
+ds2_src = psana.Source('DetInfo(CxiDs2.0:Cspad.0)')
 
 
 def binarize(psana_event, adu_threshold=10000):
@@ -51,19 +51,35 @@ def binarize(psana_event, adu_threshold=10000):
     -------
     thresh_image : np.ndarray
         Thresholded image
+        
+    Notes
+    -----
+    This is the 'map' function.
     """
 
-    cspad = psana_event.get(psana.CsPad.DataV2, camera_src)
-    if not cspad:
-        return np.zeros((32, 185, 388), dtype=np.int32)
-
-    image = np.vstack([ cspad.quads(i).data() for i in range(4) ])
-        
-    above_indicies = (image > adu_threshold)
-    image[above_indicies] = 1
-    image[np.logical_not(above_indicies)] = -1
-        
-    image = image.astype(np.int32)
+    ds1 = psana_event.get(psana.CsPad.DataV2, ds1)
+    ds2 = psana_event.get(psana.CsPad.DataV2, ds2)
+    
+    if not ds1:
+        ds1_image = np.zeros((32, 185, 388), dtype=np.int32)
+    else:
+        ds1_image = np.vstack([ cspad.quads(i).data() for i in range(4) ])
+        above_indicies = (ds1_image > adu_threshold)
+        ds1_image[above_indicies] = 1
+        ds1_image[np.logical_not(above_indicies)] = -1
+        ds1_image = ds1_image.astype(np.int32)
+            
+    if not ds2:
+        ds2_image = np.zeros((32, 185, 388), dtype=np.int32)
+    else:
+        ds2_image = np.vstack([ cspad.quads(i).data() for i in range(4) ])
+        above_indicies = (ds2_image > adu_threshold)
+        ds2_image[above_indicies] = 1
+        ds2_image[np.logical_not(above_indicies)] = -1
+        ds2_image = ds2_image.astype(np.int32)
+    
+    image = np.array((ds1_image, ds2_image))
+    assert image.shape == (2, 32, 188, 388)
         
     return image
 
@@ -108,12 +124,7 @@ def accumulate_damage(new, old):
 
 
 class ShutterControl(object):
-    """
-    Note that currently the shutter control is operated by two PVs, each
-    mapping to a separate subroutine housed on the pulse-picker motor.
-
-    So to open/close the shutter, we have to set separate to PVs to "1".
-    
+    """    
     Notes
     -----
     This is the 'action' function.
@@ -278,7 +289,7 @@ def run(adu_threshold, consecutive_threshold, area_threshold):
         trigger to close the shutter is thrown
     """
     
-    camera_buffer = np.zeros((32, 185, 388), dtype=np.int32)
+    camera_buffer = np.zeros((2, 32, 185, 388), dtype=np.int32)
     cntrl = ShutterControl(consecutive_threshold, area_threshold, debug_mode=True)
        
     monitor = MapReducer(binarize, accumulate_damage, cntrl,
