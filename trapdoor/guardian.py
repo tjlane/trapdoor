@@ -144,8 +144,7 @@ class ShutterControl(object):
         self.consecutive_threshold = consecutive_threshold
         self.area_threshold = area_threshold
 
-        self._close_routine_pv = epics.PV('CXI:ATC:MMS:29:S_CLOSE')
-        self._open_routine_pv  = epics.PV('CXI:ATC:MMS:29:S_OPEN')
+        self._control = epics.PV('CXI:R52:EVR:01:TRIG2:TPOL')
 
         self.debug_mode = debug_mode
 
@@ -177,17 +176,14 @@ class ShutterControl(object):
 
         if num_overloaded_pixels > self.area_threshold:
             print ''
-            print '*** THRESHOLD EXCEEDED -- SENDING SHUTTER CLOSE SIG ***'
+            print '*** THRESHOLD EXCEEDED ***'
             print '%d pixels over threshold (%d)' % (num_overloaded_pixels, self.area_threshold)
             print ''
 
-        # NOTE: the status query is VERY slow right now -- ~10 seconds :(
-        # may be faster on different machines tho
-        #    if self.status == 'open': # dbl check
-        #        print '/n *** THRESHOLD EXCEEDED -- SENDING SHUTTER CLOSE SIG *** \n'
-        #        self.close()
-
-        #print 'completed action (%.3f s)' % (time.time() - s)
+        if self.status == 'open':
+            self.close()
+        else:
+            print 'Shutter already closed'
 
         return
     
@@ -217,10 +213,11 @@ class ShutterControl(object):
             A timeout value in seconds.
         """
 
-        print 'Sending signal to close: %s' % self._pv_str
+        print 'SENDING CLOSE SIGNAL'
         if not self.debug_mode:
-            print '(in debug mode...)'
-            self.pv.put(0)
+            self._control.put(0)
+        else:
+            print '\t(in debug mode, nothing done...)'
 
         start = time.time()
         while not self.status == 'closed':
@@ -244,10 +241,11 @@ class ShutterControl(object):
             A timeout value in seconds.
         """
 
-        print 'Sending signal to open: %s' % self._pv_str
+        print 'Sending signal to open shutter'
         if not self.debug_mode:
-            print '(in debug mode...)'
             self.pv.put(1)
+        else:
+            print '\t(in debug mode, nothing done...)'
 
         start = time.time()
         while not self.status == 'closed':
