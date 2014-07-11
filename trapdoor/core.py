@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
 """
-Core classes for trapdoor
+Core classes.
 """
 
 import os
@@ -12,27 +12,12 @@ import socket
 from glob import glob
 import numpy as np
 
+from mpi4py import MPI
 import psana
 
 
-# ----------------------------
-# import & setup MPI env
-
-#try:
-#    raise ImportError()
-    #from mpi4py import MPI
-#except ImportError as e:
-#    print 'Could not import mpi4py locally, looking for global version...'
-#    try:
-#        sys.path.insert(1,'/reg/common/package/mpi4py/mpi4py-1.3.1/install/lib/python')
-#        from mpi4py import MPI
-#        print '... success!'
-#    except:
-#        raise ImportError('Could not import mpi4py')
-
-sys.path.insert(1,'/reg/common/package/mpi4py/mpi4py-1.3.1/install/lib/python')
-from mpi4py import MPI
-
+# --------------------------
+# global vars (even tho they make me sad)
 
 TYPE_MAP = {np.int     : MPI.INT,
             np.float32 : MPI.FLOAT,
@@ -78,6 +63,9 @@ class OnlinePsana(object):
     
         
     def register_cfg_file(self, path):
+        """
+        Registers a psana configuration file at `path`.
+        """
         if not os.path.exists(path):
             raise IOError('Could not find configuration file: %s' % path)
         psana.setConfigFile(path)
@@ -126,6 +114,17 @@ class OnlinePsana(object):
 
             source_str = 'shmem=4_%d_psana_CXI.%d:stop=no' % (multicast_mask,
                                                               core_number)
+                                                              
+                                                              
+        elif self.source in ['amoshmem', /
+                             'sxrshmem', /
+                             'xppshmem', /
+                             'xcsshmem', /
+                             'mecshmem']:
+            raise NotImplementedError('Sorry, %s hasnt been implemented yet. '
+                                      'Please contact tjlane <tjlane@stanford.edu>'
+                                      ' or the current developer of this project'
+                                      ' to request this functionality.')
             
         else:
             source_str = self.source
@@ -150,7 +149,6 @@ class MapReducer(OnlinePsana):
     def __init__(self, map_func, reduce_func, action_func,
                  result_buffer=None, config_file=None,
                  source='cxishmem'):
-                 
         """
         
         Parameters
@@ -170,9 +168,26 @@ class MapReducer(OnlinePsana):
             with it. Note that you can control computational cost using
             the `self.num_events` counter.
             
-        result_buffer
-        
-        
+        Optional Parameters
+        -------------------
+        result_buffer : np.ndarray
+            If the `master` process must maintain a reduced result in memory,
+            it is most efficient if this result is stored as an array. If
+            buffer space is provided here (ie. an initialized array of the
+            appropriate size & shape), it will be used for these purposes. A
+            standard example might be if you were collecting an average CSPAD
+            image, then you'd be storing that average in an array in the
+            master process' memory, and you'd pass an empty (32, 188, 388)
+            or similar array here.
+            
+        config_file : str
+            The path to a psana configuration file that specifies upstream
+            modules to apply to your data.
+            
+        source : str
+            This specifies the data source you wish to access. Can either be
+            shared memory, specified by the hutch followed by 'shmem' 
+            (eg. 'cxishmem'), or an experiment identifier (eg. 'cxi4113').
         """
         
         self._source = source
@@ -201,7 +216,13 @@ class MapReducer(OnlinePsana):
         
     def start(self, tachometer=True, verbose=False):
         """
-        Begin the map-reduce procedure
+        Begin the map-reduce procedure.
+        
+        Optional Parameters
+        -------------------
+        tachometer : bool
+            If `True`, print information about the speed at which data
+            are being processed.
         """
         
         self._running = True
@@ -287,11 +308,8 @@ class MapReducer(OnlinePsana):
     def stop(self):
         self._running = False
         
-    def check_for_stopsig(self):
-        pass
-        # not implemented!
-        # to do:
-        # query remote process & if signal is there, stop()
+    # def check_for_stopsig(self):
+        # todo : query remote process & if signal is there, stop()
 
     @property
     def running(self):
@@ -344,8 +362,94 @@ class MapReducer(OnlinePsana):
             print msg,
         
         return
+    
+
+class Projector(object):
+
+    # this code modified from pypad.utils.RadialAverager
+    # github.com/tjlane/pypad
+
+    def __init__(self, coordinate_values, mask, n_bins=101):
+        """
+        Initialize a projector object. This object projects images onto a 
+        pre-specified axis.
         
+        Parameters
+        ----------
+        coordinate_values : np.ndarray (float)
+            A value for each pixel identifying it's value along the projection
+            axis.
+            
+        mask : np.ndarray (int)
+            A boolean (int) saying if each pixel is masked or not.
+            
+        n_bins : int
+            The number of bins to employ. If `None` guesses a good value.
+        """
+
+        self.coordinate_values = coordinate_values
+        self.mask = mask.astype(np.int)
+
+        if not self.mask.shape == self.coordinate_values.shape:
+            raise ValueError('mask/coordinate_values shape mismatch')
+
+        self.n_bins = n_bins
+
+        # figure out the number of bins to use
+        if n_bins != None:
+            self.n_bins = n_bins
+            self._bin_factor = float(self.n_bins-0.5) / self.coordinate_values.max()
+        else:
+            self._bin_factor = 25.0
+            self.n_bins = (self.coordinate_values.max() * self._bin_factor) + 1
+
+        self._bin_assignments = np.floor( coordinate_values * self._bin_factor ).astype(np.int32)
+        self._normalization_array = (np.bincount( self._bin_assignments.flatten(),
+                                     weights=self.mask.flatten() ) \
+                                     + 1e-100).astype(np.float)
+
+        #print self.n_bins, self._bin_assignments.max() + 1 
+        assert self.n_bins == self._bin_assignments.max() + 1, 'bin mismatch in init'
+        self._normalization_array = self._normalization_array[:self.n_bins]
+
+        return
+
+    def __call__(self, image):
+        """
+        Project an image along an axis.
+
+        Parameters
+        ----------            
+        image : np.ndarray
+            The intensity at each pixel. Must be the same shape as 
+            `coordinate_values`, the map of each pixel along the projection
+            axis.
+
+        Returns
+        -------
+        bin_values : ndarray, int
+            The projected value in the bin.
+        """
+
+        image = image
+
+        if not (image.shape == self.coordinate_values.shape):
+            raise ValueError('`image` and `coordinate_values` must have the same shape')
+        if not (image.shape == self.mask.shape):
+            raise ValueError('`image` and `mask` must have the same shape')
+
+        weights = image.flatten() * self.mask.flatten()
+        bin_values = np.bincount(self._bin_assignments.flatten(), weights=weights)
+        bin_values /= self._normalization_array
+
+        assert bin_values.shape[0] == self.n_bins, 'bin number mismatch (%d, %d)' \
+                                                   % (bin_values.shape[0], self.n_bins)
+
+        return bin_values
     
-    
+
+    @property
+    def bin_centers(self):
+        return np.arange(self.n_bins) / self._bin_factor
     
     

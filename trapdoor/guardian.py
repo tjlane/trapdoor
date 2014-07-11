@@ -18,6 +18,7 @@ def camera_datatypes(camera_name):
     
     d = {'name' : 'type',
          'CxiDsd.0:Cspad.0' : psana.ndarray_float32_3,
+         'CxiDs2.0:Cspad.0' : psana.ndarray_float32_3,
          'CxiDs1.0:Cspad.0' : psana.CsPad.DataV2 #psana.ndarray_float32_3
         }
     
@@ -28,13 +29,13 @@ def camera_datatypes(camera_name):
         return
 
 
-            
-        
-# this is the "map"
+# these globals are nasty, but should save a lot of time
+global ds1_src
+ds1_src = psana.Source('DetInfo(CxiDs1.0:Cspad.0)')
 
-# need to add both cameras (!)
-global camera_src
-camera_src = psana.Source('DetInfo(CxiDs1.0:Cspad.0)')
+global ds2_src
+ds2_src = psana.Source('DetInfo(CxiDs2.0:Cspad.0)')
+
 
 def binarize(psana_event, adu_threshold=10000):
     """
@@ -50,26 +51,67 @@ def binarize(psana_event, adu_threshold=10000):
     -------
     thresh_image : np.ndarray
         Thresholded image
+        
+    Notes
+    -----
+    This is the 'map' function.
     """
 
-    cspad = psana_event.get(psana.CsPad.DataV2, camera_src)
-    if not cspad:
-        return np.zeros((32, 185, 388), dtype=np.int32)
-
-    image = np.vstack([ cspad.quads(i).data() for i in range(4) ])
-        
-    above_indicies = (image > adu_threshold)
-    image[above_indicies] = 1
-    image[np.logical_not(above_indicies)] = -1
-        
-    image = image.astype(np.int32)
+    ds1 = psana_event.get(psana.CsPad.DataV2, ds1)
+    ds2 = psana_event.get(psana.CsPad.DataV2, ds2)
+    
+    if not ds1:
+        ds1_image = np.zeros((32, 185, 388), dtype=np.int32)
+    else:
+        ds1_image = np.vstack([ cspad.quads(i).data() for i in range(4) ])
+        above_indicies = (ds1_image > adu_threshold)
+        ds1_image[above_indicies] = 1
+        ds1_image[np.logical_not(above_indicies)] = -1
+        ds1_image = ds1_image.astype(np.int32)
+            
+    if not ds2:
+        ds2_image = np.zeros((32, 185, 388), dtype=np.int32)
+    else:
+        ds2_image = np.vstack([ cspad.quads(i).data() for i in range(4) ])
+        above_indicies = (ds2_image > adu_threshold)
+        ds2_image[above_indicies] = 1
+        ds2_image[np.logical_not(above_indicies)] = -1
+        ds2_image = ds2_image.astype(np.int32)
+    
+    image = np.array((ds1_image, ds2_image))
+    assert image.shape == (2, 32, 188, 388)
         
     return image
 
 
-# reduce_func
 def accumulate_damage(new, old):
-
+    """
+    Accumulate a damage readout for the camera. This function 'reduces'
+    binary images (where 1 = damage, 0 = fine) by counting consecutive damaged
+    events on a per-pixel basis. The final returned image is roughly a count of
+    the number of consecutive shots that are damaged.
+    
+    If we see a damaged pixel, that pixel gets a +1, otherwise it gets a -1. 
+    No pixel can read below 0.
+    
+    Parameters
+    ----------
+    new : np.ndarray, binary
+        The new data to add to the accumulator
+        
+    old : np.ndarray, binary
+        The accumulator buffer
+        
+    Returns
+    -------
+    accumulated : np.ndarray, int
+        A damage reading for each pixel
+    
+    Notes
+    -----
+    This is the 'reduce' function.
+    """
+    
     assert new.shape == old.shape, 'shape mismatch in reduce'
 
     x = new + old
@@ -81,32 +123,61 @@ def accumulate_damage(new, old):
     return x
 
 
-# action_func
 class ShutterControl(object):
-    """
-    Note that currently the shutter control is operated by two PVs, each
-    mapping to a separate subroutine housed on the pulse-picker motor.
-
-    So to open/close the shutter, we have to set separate to PVs to "1".
+    """    
+    Notes
+    -----
+    This is the 'action' function.
     """
 
     
     def __init__(self, consecutive_threshold, area_threshold, debug_mode=False):
+        """
+        Initialize a shutter control. This control detects damaged CSPAD events
+        and, if enough damage (as specified by the user) is found, closes the
+        fast shutter.
+        
+        Parameters
+        ----------
+        consecutive_threshold : int
+            The number of consecutive damaged events that must occur before the
+            trigger to close the shutter is thrown
+            
+        area_threshold : int
+            The number of pixels on the CSPAD that must be damaged before tbe
+            trigger to close the shutter is thrown
+            
+        debug_mode : bool
+            If `True`, don't actually control the shutter, just print warning
+            messages.
+        """
 
         self.consecutive_threshold = consecutive_threshold
         self.area_threshold = area_threshold
 
-        self._close_routine_pv = epics.PV('CXI:ATC:MMS:29:S_CLOSE')
-        self._open_routine_pv  = epics.PV('CXI:ATC:MMS:29:S_OPEN')
+        self._control = epics.PV('CXI:R52:EVR:01:TRIG2:TPOL')
 
         self.debug_mode = debug_mode
 
         return
+    
 
     def __call__(self, camera_damage_image):
         """
-        Based on a CSPAD image, decide whether to keep the shutter
-        open or closed
+        Based on a CSPAD image, decide whether to keep the shutter open or 
+        closed.
+        
+        Parameters
+        ----------
+        camera_damage_image : np.ndarray, int
+            An `accumulated` CSPAD image, where the pixel values indicate a
+            running count of the number of damaged events at that pixel.
+            
+        See Also
+        --------
+        accumulate_damage : function
+            The function that generates images that should be passed to this
+            function.
         """
 
         s = time.time()
@@ -116,19 +187,17 @@ class ShutterControl(object):
 
         if num_overloaded_pixels > self.area_threshold:
             print ''
-            print '*** THRESHOLD EXCEEDED -- SENDING SHUTTER CLOSE SIG ***'
+            print '*** THRESHOLD EXCEEDED ***'
             print '%d pixels over threshold (%d)' % (num_overloaded_pixels, self.area_threshold)
             print ''
 
-        # NOTE: the status query is VERY slow right now -- ~10 seconds :(
-        # may be faster on different machines tho
-        #    if self.status == 'open': # dbl check
-        #        print '/n *** THRESHOLD EXCEEDED -- SENDING SHUTTER CLOSE SIG *** \n'
-        #        self.close()
-
-        #print 'completed action (%.3f s)' % (time.time() - s)
+        if self.status == 'open':
+            self.close()
+        else:
+            print 'Shutter already closed'
 
         return
+    
 
     @property
     def status(self):
@@ -143,13 +212,23 @@ class ShutterControl(object):
             s = 'unknown'
 
         return s
+        
 
     def close(self, timeout=5.0):
+        """
+        Shutter the beam.
+        
+        Parameters
+        ----------
+        timeout : float
+            A timeout value in seconds.
+        """
 
-        print 'Sending signal to close: %s' % self._pv_str
+        print 'SENDING CLOSE SIGNAL'
         if not self.debug_mode:
-            print '(in debug mode...)'
-            self.pv.put(0)
+            self._control.put(0)
+        else:
+            print '\t(in debug mode, nothing done...)'
 
         start = time.time()
         while not self.status == 'closed':
@@ -164,11 +243,20 @@ class ShutterControl(object):
 
 
     def open(self, timeout=5.0):
+        """
+        Open the beam shutter.
 
-        print 'Sending signal to open: %s' % self._pv_str
+        Parameters
+        ----------
+        timeout : float
+            A timeout value in seconds.
+        """
+
+        print 'Sending signal to open shutter'
         if not self.debug_mode:
-            print '(in debug mode...)'
             self.pv.put(1)
+        else:
+            print '\t(in debug mode, nothing done...)'
 
         start = time.time()
         while not self.status == 'closed':
@@ -182,9 +270,26 @@ class ShutterControl(object):
         return True
 
         
-def main(adu_threshold, consecutive_threshold, area_threshold):
+def run(adu_threshold, consecutive_threshold, area_threshold):
+    """
+    Run the CSPAD guardian. This starts up an infinite loop that looks for
+    CSPAD damage and shutters the beam if it is found.
+        
+    Parameters
+    ----------
+    adu_threshold : int
+        The ADU value that, if exceeded, identifies a pixel as damaged.
     
-    camera_buffer = np.zeros((32, 185, 388), dtype=np.int32)
+    consecutive_threshold : int
+        The number of consecutive damaged events that must occur before the
+        trigger to close the shutter is thrown
+        
+    area_threshold : int
+        The number of pixels on the CSPAD that must be damaged before tbe
+        trigger to close the shutter is thrown
+    """
+    
+    camera_buffer = np.zeros((2, 32, 185, 388), dtype=np.int32)
     cntrl = ShutterControl(consecutive_threshold, area_threshold, debug_mode=True)
        
     monitor = MapReducer(binarize, accumulate_damage, cntrl,
@@ -196,10 +301,12 @@ def main(adu_threshold, consecutive_threshold, area_threshold):
         
 if __name__ == '__main__':
     
+    # these are some default values for testing purposes only
+    
     adu_threshold         = 5000
     consecutive_threshold = 5
     area_threshold        = 30
     
-    main(adu_threshold, consecutive_threshold, area_threshold)
+    run(adu_threshold, consecutive_threshold, area_threshold)
     
 
