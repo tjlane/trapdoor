@@ -199,7 +199,7 @@ class MapReducer(OnlinePsana):
         return
     
         
-    def start(self, tachometer=False, verbose=False):
+    def start(self, tachometer=True, verbose=False):
         """
         Begin the map-reduce procedure
         """
@@ -269,7 +269,7 @@ class MapReducer(OnlinePsana):
            
             req = None 
             while self.running:
-                print '%.2f || Master: %d events' % (time.time(), self.num_reduced_events)
+                #print '%.2f || Master: %d events' % (time.time(), self.num_reduced_events)
                 if req: req.Wait()
                 req = irecv(self._buffer, source=MPI.ANY_SOURCE, tag=0)
                 self._result = self.reduce(self._buffer, self._result)

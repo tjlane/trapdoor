@@ -111,7 +111,7 @@ except subprocess.CalledProcessError:
     print 'RETURN CODE: %d' % r
     raise IOError('No route to host: %s' % args.host)
 
-cmd = ['ssh', args.host,
+cmd = [ #'ssh', args.host,
        '/reg/common/package/openmpi/openmpi-1.8/install/bin/mpirun',
        '-n', str(num_procs),
        '--host', ','.join(hosts[:args.nodes]),

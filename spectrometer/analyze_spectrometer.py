@@ -108,7 +108,7 @@ class Projector(object):
 
 class SpectrometerAnalyzer(object):
 
-    def __init__(self, n_bins=101):
+    def __init__(self, n_bins=101, pulse_energy_bins=np.linspace(0.0, 3.0, 100)):
         
         self.shots_processed = 0
         
@@ -149,10 +149,14 @@ class SpectrometerAnalyzer(object):
         ebeam   = psana_event.get(psana.Bld.BldDataEBeamV5, self.ebeam_src)
         gasdet  = psana_event.get(psana.Bld.BldDataFEEGasDetEnergy, self.gasdet_src)
         eventid = psana_event.get(psana.EventId)
-        
-        # perform the projection
-        energy_spectrum = self.projector(camdata.data16())
 
+        try:
+            #print '\r' + ebeam.ebeamL3Energy(), gasdet.f_11_ENRC(), eventid.time()[1], eventid.fiducials(),
+            energy_spectrum = self.projector(camdata.data16())
+        except:
+            print '--- corrupt shot ---'
+            energy_spectrum = np.zeros(self.n_bins)
+        
         return energy_spectrum
 
 
@@ -163,9 +167,15 @@ class SpectrometerAnalyzer(object):
         # perform a running average
         sp = float(self.shots_processed)
         average_spectrum = old.astype(np.float) * ( (sp-1) / sp ) + new.astype(np.float) / sp
+
+        if self.shots_processed % 10 == 0:
+            ax.cla()
+            ax.set_xlabel('Energy (arb)')
+            ax.set_ylabel('Intensity (ADU)')
+            ax.plot(average_spectrum, color='b')
+            ax.plot(new, color='g')
+            plt.draw() 
         
-        # this is just a placeholder for now
-        histogram = np.ones(( 10, len(average_spectrum) ))
         
         return average_spectrum
 
@@ -173,14 +183,7 @@ class SpectrometerAnalyzer(object):
     # action function
     def store(self, average_spectrum):
 
-        if self.shots_processed % 10 == 0:
-            ax.cla()
-            ax.set_xlabel('Energy (arb)')
-            ax.set_ylabel('Intensity (ADU)')
-            ax.plot(average_spectrum)
-            plt.draw()
-
-        self._hst_data.put(average_spectrum)
+        #self._hst_data.put(average_spectrum)
 
         return
         
