@@ -12,7 +12,13 @@ import socket
 from glob import glob
 import numpy as np
 
+# currently the following line is necessary to ensure the correct mpi4py
+# is used -- at a later date, this will be included in an ana release
+# ---> if you don't include this line, you may get some cryptic error 
+#      about OpenFiber not being able to alloc memory (!)
+sys.path.insert(1,'/reg/common/package/mpi4py/mpi4py-1.3.1/install/lib/python')
 from mpi4py import MPI
+
 import psana
 
 
@@ -116,10 +122,10 @@ class OnlinePsana(object):
                                                               core_number)
                                                               
                                                               
-        elif self.source in ['amoshmem', /
-                             'sxrshmem', /
-                             'xppshmem', /
-                             'xcsshmem', /
+        elif self.source in ['amoshmem', \
+                             'sxrshmem', \
+                             'xppshmem', \
+                             'xcsshmem', \
                              'mecshmem']:
             raise NotImplementedError('Sorry, %s hasnt been implemented yet. '
                                       'Please contact tjlane <tjlane@stanford.edu>'
@@ -296,7 +302,7 @@ class MapReducer(OnlinePsana):
                 self._result = self.reduce(self._buffer, self._result)
                 self.num_reduced_events += 1
                 self.action(self._result)
-                self.check_for_stopsig()
+                #self.check_for_stopsig()
                 
                 # this will get all the rate data from the workers and print it
                 if tachometer:
@@ -320,7 +326,7 @@ class MapReducer(OnlinePsana):
         return self._result
         
         
-    def tachometer(self, verbose=True):
+    def tachometer(self, verbose=True, inplace_text=True):
         """
         Gather the rate of data processing from all worker processes and, if
         `verbose`, display it.
@@ -357,8 +363,12 @@ class MapReducer(OnlinePsana):
             # if unique gets rid of lines, fill em back in
             num_missing_lines = min(MPI_SIZE, 8) - len(rates)
 
-            prefix = ERASE_LINE * (len(msg) + num_missing_lines + 1)
-            msg = prefix + '\n' * num_missing_lines + '\n'.join(msg)
+            if inplace_text:
+                prefix = ERASE_LINE * (len(msg) + num_missing_lines + 1)
+                prefix += '\n' * num_missing_lines
+            else:
+                prefix = ''
+            msg = '\n'.join(msg)
             print msg,
         
         return

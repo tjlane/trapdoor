@@ -70,7 +70,7 @@ mpi_script_text = """#!/bin/bash
 # USER:       %s
 # DATE:       %s
 
-pyscript="import sys; sys.path.append('/reg/neh/home2/tjlane/opt/trapdoor'); from trapdoor import guardian; guardian.main(%d, %d, %d)"
+pyscript="import sys; sys.path.append('/reg/neh/home2/tjlane/opt/trapdoor'); from trapdoor import guardian; guardian.run(%d, %d, %d)"
 
 source /reg/g/psdm/etc/ana_env.sh
 . /reg/g/psdm/bin/sit_setup.sh
@@ -118,9 +118,14 @@ cmd = [ #'ssh', args.host,
        '--host', ','.join(hosts[:args.nodes]),
         mpi_script_path]
 
-print '>> starting MPI'
 print '-----------------------'
+print '>> starting MPI'
 print 'cmd: %s' % ' '.join(cmd)
-r = subprocess.check_call(cmd, stdout=subprocess.PIPE)
 
+# for some reason, NOT passing the kwargs allows the stdout
+# to reach the running terminal
+r = subprocess.check_call(cmd, shell=False)
+                          #stdout=subprocess.PIPE,
+                          #stderr=subprocess.STDOUT)
+print '-----------------------'
 

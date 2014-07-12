@@ -57,13 +57,13 @@ def binarize(psana_event, adu_threshold=10000):
     This is the 'map' function.
     """
 
-    ds1 = psana_event.get(psana.CsPad.DataV2, ds1)
-    ds2 = psana_event.get(psana.CsPad.DataV2, ds2)
+    ds1 = psana_event.get(psana.CsPad.DataV2, ds1_src)
+    ds2 = psana_event.get(psana.CsPad.DataV2, ds2_src)
     
     if not ds1:
         ds1_image = np.zeros((32, 185, 388), dtype=np.int32)
     else:
-        ds1_image = np.vstack([ cspad.quads(i).data() for i in range(4) ])
+        ds1_image = np.vstack([ ds1.quads(i).data() for i in range(4) ])
         above_indicies = (ds1_image > adu_threshold)
         ds1_image[above_indicies] = 1
         ds1_image[np.logical_not(above_indicies)] = -1
@@ -72,14 +72,14 @@ def binarize(psana_event, adu_threshold=10000):
     if not ds2:
         ds2_image = np.zeros((32, 185, 388), dtype=np.int32)
     else:
-        ds2_image = np.vstack([ cspad.quads(i).data() for i in range(4) ])
+        ds2_image = np.vstack([ ds2.quads(i).data() for i in range(4) ])
         above_indicies = (ds2_image > adu_threshold)
         ds2_image[above_indicies] = 1
         ds2_image[np.logical_not(above_indicies)] = -1
         ds2_image = ds2_image.astype(np.int32)
     
     image = np.array((ds1_image, ds2_image))
-    assert image.shape == (2, 32, 188, 388)
+    assert image.shape == (2, 32, 185, 388), 'img shp %s' % (str(image.shape),)
         
     return image
 
@@ -191,27 +191,20 @@ class ShutterControl(object):
             print '%d pixels over threshold (%d)' % (num_overloaded_pixels, self.area_threshold)
             print ''
 
-        if self.status == 'open':
-            self.close()
-        else:
-            print 'Shutter already closed'
+            if self.status == 'open':
+                self.close()
+            else:
+                print 'Shutter already closed'
 
         return
     
 
     @property
     def status(self):
-        opn = self._close_routine_pv.status
-        cls = self._open_routine_pv.status
-
-        if opn and not cls:
-            s = 'open'
-        elif cls and not opn:
-            s = 'closed'
+        if self._control.get():
+            return 'open'
         else:
-            s = 'unknown'
-
-        return s
+            return 'closed'
         
 
     def close(self, timeout=5.0):
@@ -294,7 +287,7 @@ def run(adu_threshold, consecutive_threshold, area_threshold):
        
     monitor = MapReducer(binarize, accumulate_damage, cntrl,
                          result_buffer=camera_buffer)
-    monitor.start(verbose=False)
+    monitor.start()
     
     return
 
