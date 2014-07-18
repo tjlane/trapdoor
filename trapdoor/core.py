@@ -214,13 +214,13 @@ class MapReducer(OnlinePsana):
             self._use_array_comm = False
             
         self.num_reduced_events = 0
-        self._tachometer_run_freq    = 50
-        self._tachometer_report_freq = 5
+        self._tachometer_run_freq    = 12
+        self._tachometer_report_freq = 12
 
         return
     
         
-    def start(self, tachometer=True, verbose=False):
+    def start(self, tachometer=True, verbose=True):
         """
         Begin the map-reduce procedure.
         
@@ -289,33 +289,62 @@ class MapReducer(OnlinePsana):
         # master loops continuously, looking for communicated from workers & 
         #     reduces each of those
         elif self.role == 'master':
-            if verbose: print 'Starting array-enabled master (r%d)' % MPI_RANK
+
+            try:
+
+                if verbose:
+                    print 'Starting array-enabled master (r%d)' % MPI_RANK
             
-            if self._use_array_comm:
-                self._buffer = np.zeros_like(self._result)
+                if self._use_array_comm:
+                    self._buffer = np.zeros_like(self._result)
            
-            req = None 
-            while self.running:
-                #print '%.2f || Master: %d events' % (time.time(), self.num_reduced_events)
-                if req: req.Wait()
-                req = irecv(self._buffer, source=MPI.ANY_SOURCE, tag=0)
-                self._result = self.reduce(self._buffer, self._result)
-                self.num_reduced_events += 1
-                self.action(self._result)
-                #self.check_for_stopsig()
+                req = None 
+                while self.running:
+                    if req: req.Wait()
+                    req = irecv(self._buffer, source=MPI.ANY_SOURCE, tag=0)
+                    self._result = self.reduce(self._buffer, self._result)
+                    self.num_reduced_events += 1
+                    self.action(self._result)
+
+                    #self.check_for_stopsig()
                 
-                # this will get all the rate data from the workers and print it
-                if tachometer:
-                    if self.num_reduced_events % self._tachometer_run_freq == 0:
-                        self.tachometer(verbose=True)
+                    # this will get all the rate data from the workers and print it
+                    if tachometer:
+                        if self.num_reduced_events % self._tachometer_run_freq == 0:
+                            self.tachometer(verbose=True)
+                            if hasattr(self.action, 'publish_stats'):
+                                self.action.publish_stats(master_stats=self.stats)
+ 
+
+            except KeyboardInterrupt as e:
+                print 'Recieved keyboard sigterm...'
+                print 'shutting down MPI.'
+                self.shutdown()
+                print '---> execution finished'
+                sys.exit(0)
                 
         return                  
 
     def stop(self):
         self._running = False
+
+    @property
+    def stats(self):
+        """
+        Publish statistics to a monitoring process.
+        """
+
+        stats = {'num_procs'      : MPI_SIZE,
+                 'per_proc_rate'  : self.mean_rate,
+                 'evts_processed' : self.num_reduced_events,
+                 'hosts'          : ['']
+                }
+
+        return stats
         
-    # def check_for_stopsig(self):
+    def check_for_stopsig(self):
         # todo : query remote process & if signal is there, stop()
+        return
 
     @property
     def running(self):
@@ -337,8 +366,8 @@ class MapReducer(OnlinePsana):
         sample = np.unique( np.random.randint(1, MPI_SIZE, min(MPI_SIZE, 8)) )
 
         rates = [ COMM.recv(source=i, tag=1) for i in sample ]
-        mean_rate = np.mean(rates)
-        total_rate = float(MPI_SIZE) * mean_rate
+        self.mean_rate  = np.mean(rates)
+        self.total_rate = float(MPI_SIZE) * self.mean_rate
         
         if verbose:
             
@@ -349,8 +378,8 @@ class MapReducer(OnlinePsana):
                 msg.append( 'Rank %d :: %.2f Hz' % (sample[i], rates[i]) )
             msg.extend([
             '-----------------------',
-            'Mean:     %.2f Hz' % mean_rate,
-            'Total:    %.2f Hz' % total_rate,
+            'Mean:     %.2f Hz' % self.mean_rate,
+            'Total:    %.2f Hz' % self.total_rate,
             '-----------------------',
             'Events processed: %d' % self.num_reduced_events,
             '-----------------------',

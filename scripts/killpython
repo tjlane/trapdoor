@@ -1,0 +1,12 @@
+#!/bin/bash
+
+cmd="for p in `ps aux | grep python | grep tjlane | cut -c 10-15`; do echo $p; kill $p; done"
+
+hosts="daq-cxi-dss07 daq-cxi-dss08 daq-cxi-dss09 daq-cxi-dss10 daq-cxi-dss11 daq-cxi-dss12"
+
+
+for h in $hosts; do
+    ssh $h "$cmd"
+done
+
+

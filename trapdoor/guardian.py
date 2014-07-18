@@ -7,6 +7,7 @@ that actually processes data in real time and operates the shutter.
 """
 
 import time
+import zmq
 
 import psana
 import epics
@@ -158,6 +159,7 @@ class ShutterControl(object):
         self._control = epics.PV('CXI:R52:EVR:01:TRIG2:TPOL')
 
         self.debug_mode = debug_mode
+        self._zmq_ready = 0 # don't use any ZMQ if not necessary
 
         return
     
@@ -182,13 +184,14 @@ class ShutterControl(object):
 
         s = time.time()
 
-        num_overloaded_pixels = np.sum( camera_damage_image > self.consecutive_threshold )
+        self.num_overloaded_pixels = np.sum( camera_damage_image > self.consecutive_threshold )
         #num_overloaded_pixels = np.sum( (camera_damage_image / self.consecutive_threshold).astype(np.int) )
 
-        if num_overloaded_pixels > self.area_threshold:
+        if self.num_overloaded_pixels > self.area_threshold:
             print ''
             print '*** THRESHOLD EXCEEDED ***'
-            print '%d pixels over threshold (%d)' % (num_overloaded_pixels, self.area_threshold)
+            print '%d pixels over threshold (%d)' % (self.num_overloaded_pixels,
+                                                     self.area_threshold)
             print ''
 
             if self.status == 'open':
@@ -197,8 +200,39 @@ class ShutterControl(object):
                 print 'Shutter already closed'
 
         return
-    
 
+
+    def publish_stats(self, master_stats={}):
+        """
+        Publish statistics to a monitoring process.
+        """
+
+        #if not self._zmq_ready:
+        #    self.init_zmq()
+
+        #stats = {
+        #         'hitrate'        : 0.0,
+        #         'pix_dmg'        : self.num_overloaded_pixels,
+        #         'pix_dmg_thshd'  : self.area_threshold
+        #        }
+
+        #stats.update(master_stats)
+        #print 'from action:', stats
+        #self._zmq_socket.send(stats)
+
+        print 'publishing data to monitor...'
+
+        return
+
+
+    def init_zmq(self, port=4747):
+        self._zmq_ready = 1
+        self._zmq_context = zmq.Context()
+        self._zmq_socket  = self._zmq_context.socket(zmq.PUB)
+        self._zmq_socket.bind('tcp://*:%s' % port)
+        return
+
+    
     @property
     def status(self):
         if self._control.get():
@@ -262,6 +296,39 @@ class ShutterControl(object):
 
         return True
 
+
+class GuardianMonitor(object):
+    """
+    Generates a visual display of the Guardian.
+    """
+
+    def __init__(self, port=4747):
+        
+        self._zmq_context = zmq.Context()
+        self._zmq_socket  = self._zmq_context.socket(zmq.SUB)
+        self._zmq_socket.connect('tcp://localhost:%s' % port)
+
+        #self._app = QtGui.QApplication([])
+        #pg.mkQApp()
+
+        #self._widget = pg.PlotWidget()
+        #self._widget.show()
+
+
+        return
+
+    def start(self):
+
+        plot_buffer = []
+
+        while True:
+            stats = self._zmq_socket.recv()
+            pg.plot(plot_buffer)
+            pg.show()
+
+        return
+
+
         
 def run(adu_threshold, consecutive_threshold, area_threshold):
     """
@@ -283,7 +350,8 @@ def run(adu_threshold, consecutive_threshold, area_threshold):
     """
     
     camera_buffer = np.zeros((2, 32, 185, 388), dtype=np.int32)
-    cntrl = ShutterControl(consecutive_threshold, area_threshold, debug_mode=True)
+    cntrl = ShutterControl(consecutive_threshold, area_threshold,
+                           debug_mode=False)
        
     monitor = MapReducer(binarize, accumulate_damage, cntrl,
                          result_buffer=camera_buffer)
