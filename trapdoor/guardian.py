@@ -1,11 +1,11 @@
 #!/usr/bin/env python
 
-
 """
 This file contains all code relating to the "guardian" MPI process
 that actually processes data in real time and operates the shutter.
 """
 
+import os
 import time
 import zmq
 
@@ -14,6 +14,7 @@ import epics
 import numpy as np
 
 from core import MapReducer
+
 
 def camera_datatypes(camera_name):
     
@@ -211,9 +212,10 @@ class ShutterControl(object):
         #    self.init_zmq()
 
         #stats = {
-        #         'hitrate'        : 0.0,
-        #         'pix_dmg'        : self.num_overloaded_pixels,
-        #         'pix_dmg_thshd'  : self.area_threshold
+        #         'ds1_damage'      : array, (self.num_overloaded_pixels)
+        #         'ds2_damage'      : array, (self.num_overloaded_pixels)
+        #         'xtal_hitrate'    : array,
+        #         'diffuse_hitrate' : array
         #        }
 
         #stats.update(master_stats)
@@ -356,6 +358,122 @@ def run(adu_threshold, consecutive_threshold, area_threshold):
     monitor = MapReducer(binarize, accumulate_damage, cntrl,
                          result_buffer=camera_buffer)
     monitor.start()
+    
+    return
+
+
+def run_mpi(adu_threshold, consecutive_threshold, area_threshold,
+            hosts):
+    """
+    Run the CSPAD guardian. This starts up an infinite loop that looks for
+    CSPAD damage and shutters the beam if it is found.
+        
+    Parameters
+    ----------
+    adu_threshold : int
+        The ADU value that, if exceeded, identifies a pixel as damaged.
+    
+    consecutive_threshold : int
+        The number of consecutive damaged events that must occur before the
+        trigger to close the shutter is thrown
+        
+    area_threshold : int
+        The number of pixels on the CSPAD that must be damaged before tbe
+        trigger to close the shutter is thrown
+    """
+    
+    # determine the total number of pixels implied by args.perc
+
+
+    num_procs = args.nodes * 8
+
+    # give the user some output!
+    print ''
+    print '>>             TRAPDOOR'
+    print '           ... starting'
+    print '-----------------------'
+    print 'nodes:         %d' % args.nodes
+    print 'processors:    %d' % num_procs
+    print 'host:          %s' % args.host
+    print 'ADU tshd:      %d' % args.adu
+    print 'Pixel # tshd:  %d' % area_threshold
+    print 'Consec tshd:   %d' % args.consecutive
+    print '-----------------------' 
+
+
+    # we have to jump through some hoops in order to make this work
+    # I'm going to follow Chris' lead and write a bash script to disk
+    # that gets called later by mpirun
+
+    trapdoor_dir = os.path.join(os.environ['HOME'], '.trapdoor')
+    if not os.path.exists(trapdoor_dir):
+        os.mkdir(trapdoor_dir)
+        print 'Created: %s' % trapdoor_dir
+
+
+    # (1) write the script MPI will execute
+    mpi_script_path = os.path.join(trapdoor_dir, 'mpi_script.sh')
+
+    mpi_script_text = """#!/bin/bash
+
+    # THIS IS AN AUTOMATICALLY GENERATED SCRIPT
+    # CREATED BY: trapdoor
+    # USER:       %s
+    # DATE:       %s
+
+    pyscript="import sys; sys.path.append('/reg/neh/home2/tjlane/opt/trapdoor'); from trapdoor import guardian; guardian.run(%d, %d, %d)"
+
+    source /reg/g/psdm/etc/ana_env.sh
+    . /reg/g/psdm/bin/sit_setup.sh
+
+    python -c "$pyscript"
+
+    """ % (os.environ['USER'],
+           datetime.datetime.now(),
+           args.adu,
+           args.consecutive,
+           area_threshold)
+
+    f = open(mpi_script_path, 'w')
+    f.write(mpi_script_text)
+    f.close()
+
+    # make that script chmod a+x
+    st = os.stat(mpi_script_path)
+    os.chmod(mpi_script_path, st.st_mode | 0111)
+
+    print 'Wrote: %s' % mpi_script_path
+
+    # (3) shell out the MPI command
+
+    try:
+        r = subprocess.check_call(['ssh', args.host, 'hostname'])
+    except subprocess.CalledProcessError:
+        print 'RETURN CODE: %d' % r
+        raise IOError('No route to host: %s' % args.host)
+
+    # try and find MPI
+    lcls_mpi = '/reg/common/package/openmpi/openmpi-1.8/install/bin/mpirun'
+    if os.path.exists(lcls_mpi):
+        mpi_bin = '/reg/common/package/openmpi/openmpi-1.8/install/bin/mpirun'
+    elif 'mpirun' in os.environ['PATH']:
+        mpi_bin = 'mpirun'
+    else:
+        raise RuntimeError('Could not find an MPI `mpirun` executable!')
+
+    cmd = [mpi_bin,
+           '-n', str(num_procs),
+           '--host', ','.join(hosts),
+            mpi_script_path]
+
+    print '-----------------------'
+    print '>> starting MPI'
+    print 'cmd: %s' % ' '.join(cmd)
+
+    # for some reason, NOT passing the kwargs stdout/stderr allows the stdout
+    # to reach the running terminal
+    r = subprocess.check_call(cmd, shell=False)
+    print '-----------------------'
     
     return
 
