@@ -38,6 +38,12 @@ ERASE_LINE = '\x1b[1A\x1b[2K'
 
 # --------------------------
 
+class ShutdownInterrupt(Exception):
+    """
+    Custom exception that allows any part of the app to kill MPI
+    """
+    pass
+    
 
 class OnlinePsana(object):
     """
@@ -96,7 +102,7 @@ class OnlinePsana(object):
             
             node_number = MPI_RANK / 8
             core_number = MPI_RANK % 8
-
+            
             # determine the multicast_mask by looking in /dev/shm
             shm_srvs = glob('/dev/shm/*psana*')
             if len(shm_srvs) == 1:
@@ -143,7 +149,6 @@ class OnlinePsana(object):
         print 'Accessing data stream: %s' % self._source_string
         ds = psana.DataSource(self._source_string)
         return ds.events()
-    
     
     
 class MapReducer(OnlinePsana):
@@ -214,8 +219,7 @@ class MapReducer(OnlinePsana):
             self._use_array_comm = False
             
         self.num_reduced_events = 0
-        self._tachometer_run_freq    = 12
-        self._tachometer_report_freq = 12
+        self._analysis_frequency = 120
 
         return
     
@@ -274,8 +278,8 @@ class MapReducer(OnlinePsana):
 
                 # send the rate of processing to the master process
                 if tachometer:
-                    if event_index % self._tachometer_report_freq == 0:
-                        rate = float(self._tachometer_report_freq) / (time.time() - start_time)
+                    if event_index % self._analysis_frequency == 0:
+                        rate = float(self._analysis_frequency) / (time.time() - start_time)
                         start_time = time.time()
                         COMM.isend(rate, dest=0, tag=1)
                         if verbose:
@@ -310,29 +314,44 @@ class MapReducer(OnlinePsana):
                 
                     # this will get all the rate data from the workers and print it
                     if tachometer:
-                        if self.num_reduced_events % self._tachometer_run_freq == 0:
+                        if self.num_reduced_events % self._analysis_frequency == 0:
                             self.tachometer(verbose=True)
                             if hasattr(self.action, 'publish_stats'):
                                 self.action.publish_stats(master_stats=self.stats)
  
 
-            except KeyboardInterrupt as e:
-                print 'Recieved keyboard sigterm...'
-                print 'shutting down MPI.'
-                self.shutdown()
-                print '---> execution finished'
-                sys.exit(0)
+                    except KeyboardInterrupt as e:
+                        print 'Recieved keyboard sigterm...'
+                        print e
+                        print 'shutting down MPI.'
+                        self.shutdown()
+                        print '---> execution finished'
+                        sys.exit(0)
+                        
+                    except ShutdownInterrupt as e:
+                        print 'Recieved shutdown call...'
+                        print e
+                        print 'shutting down MPI.'
+                        self.shutdown()
+                        print '---> execution finished'
+                        sys.exit(0)
+                        
                 
         return                  
 
     def stop(self):
         self._running = False
+        return
+    
 
     @property
     def stats(self):
         """
         Publish statistics to a monitoring process.
         """
+        
+        # WORK
+        raise NotImplementedError()
 
         stats = {'num_procs'      : MPI_SIZE,
                  'per_proc_rate'  : self.mean_rate,
@@ -341,21 +360,19 @@ class MapReducer(OnlinePsana):
                 }
 
         return stats
-        
-    def check_for_stopsig(self):
-        # todo : query remote process & if signal is there, stop()
-        return
+    
 
     @property
     def running(self):
         return self._running
+    
        
     @property 
     def result(self):
         return self._result
+    
         
-        
-    def tachometer(self, verbose=True, inplace_text=True):
+    def tachometer(self, verbose=False, inplace_text=True):
         """
         Gather the rate of data processing from all worker processes and, if
         `verbose`, display it.
@@ -403,92 +420,6 @@ class MapReducer(OnlinePsana):
         return
     
 
-class Projector(object):
 
-    # this code modified from pypad.utils.RadialAverager
-    # github.com/tjlane/pypad
-
-    def __init__(self, coordinate_values, mask, n_bins=101):
-        """
-        Initialize a projector object. This object projects images onto a 
-        pre-specified axis.
-        
-        Parameters
-        ----------
-        coordinate_values : np.ndarray (float)
-            A value for each pixel identifying it's value along the projection
-            axis.
-            
-        mask : np.ndarray (int)
-            A boolean (int) saying if each pixel is masked or not.
-            
-        n_bins : int
-            The number of bins to employ. If `None` guesses a good value.
-        """
-
-        self.coordinate_values = coordinate_values
-        self.mask = mask.astype(np.int)
-
-        if not self.mask.shape == self.coordinate_values.shape:
-            raise ValueError('mask/coordinate_values shape mismatch')
-
-        self.n_bins = n_bins
-
-        # figure out the number of bins to use
-        if n_bins != None:
-            self.n_bins = n_bins
-            self._bin_factor = float(self.n_bins-0.5) / self.coordinate_values.max()
-        else:
-            self._bin_factor = 25.0
-            self.n_bins = (self.coordinate_values.max() * self._bin_factor) + 1
-
-        self._bin_assignments = np.floor( coordinate_values * self._bin_factor ).astype(np.int32)
-        self._normalization_array = (np.bincount( self._bin_assignments.flatten(),
-                                     weights=self.mask.flatten() ) \
-                                     + 1e-100).astype(np.float)
-
-        #print self.n_bins, self._bin_assignments.max() + 1 
-        assert self.n_bins == self._bin_assignments.max() + 1, 'bin mismatch in init'
-        self._normalization_array = self._normalization_array[:self.n_bins]
-
-        return
-
-    def __call__(self, image):
-        """
-        Project an image along an axis.
-
-        Parameters
-        ----------            
-        image : np.ndarray
-            The intensity at each pixel. Must be the same shape as 
-            `coordinate_values`, the map of each pixel along the projection
-            axis.
-
-        Returns
-        -------
-        bin_values : ndarray, int
-            The projected value in the bin.
-        """
-
-        image = image
-
-        if not (image.shape == self.coordinate_values.shape):
-            raise ValueError('`image` and `coordinate_values` must have the same shape')
-        if not (image.shape == self.mask.shape):
-            raise ValueError('`image` and `mask` must have the same shape')
-
-        weights = image.flatten() * self.mask.flatten()
-        bin_values = np.bincount(self._bin_assignments.flatten(), weights=weights)
-        bin_values /= self._normalization_array
-
-        assert bin_values.shape[0] == self.n_bins, 'bin number mismatch (%d, %d)' \
-                                                   % (bin_values.shape[0], self.n_bins)
-
-        return bin_values
-    
-
-    @property
-    def bin_centers(self):
-        return np.arange(self.n_bins) / self._bin_factor
     
     

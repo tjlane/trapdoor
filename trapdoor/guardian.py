@@ -13,116 +13,7 @@ import psana
 import epics
 import numpy as np
 
-from core import MapReducer
-
-
-def camera_datatypes(camera_name):
-    
-    d = {'name' : 'type',
-         'CxiDsd.0:Cspad.0' : psana.ndarray_float32_3,
-         'CxiDs2.0:Cspad.0' : psana.ndarray_float32_3,
-         'CxiDs1.0:Cspad.0' : psana.CsPad.DataV2 #psana.ndarray_float32_3
-        }
-    
-    if camera_name in d.keys():
-        return d[camera_name]
-    else:
-        raise KeyError('No known data type for camera: %s' % camera_name)
-        return
-
-
-# these globals are nasty, but should save a lot of time
-global ds1_src
-ds1_src = psana.Source('DetInfo(CxiDs1.0:Cspad.0)')
-
-global ds2_src
-ds2_src = psana.Source('DetInfo(CxiDs2.0:Cspad.0)')
-
-
-def binarize(psana_event, adu_threshold=10000):
-    """
-    Threshold an image, setting values to +/- 1, for above/below the
-    threshold value, respectively.
-        
-    Parameters
-    ----------
-    image : np.ndarray
-        The image to threshold
-            
-    Returns
-    -------
-    thresh_image : np.ndarray
-        Thresholded image
-        
-    Notes
-    -----
-    This is the 'map' function.
-    """
-
-    ds1 = psana_event.get(psana.CsPad.DataV2, ds1_src)
-    ds2 = psana_event.get(psana.CsPad.DataV2, ds2_src)
-    
-    if not ds1:
-        ds1_image = np.zeros((32, 185, 388), dtype=np.int32)
-    else:
-        ds1_image = np.vstack([ ds1.quads(i).data() for i in range(4) ])
-        above_indicies = (ds1_image > adu_threshold)
-        ds1_image[above_indicies] = 1
-        ds1_image[np.logical_not(above_indicies)] = -1
-        ds1_image = ds1_image.astype(np.int32)
-            
-    if not ds2:
-        ds2_image = np.zeros((32, 185, 388), dtype=np.int32)
-    else:
-        ds2_image = np.vstack([ ds2.quads(i).data() for i in range(4) ])
-        above_indicies = (ds2_image > adu_threshold)
-        ds2_image[above_indicies] = 1
-        ds2_image[np.logical_not(above_indicies)] = -1
-        ds2_image = ds2_image.astype(np.int32)
-    
-    image = np.array((ds1_image, ds2_image))
-    assert image.shape == (2, 32, 185, 388), 'img shp %s' % (str(image.shape),)
-        
-    return image
-
-
-def accumulate_damage(new, old):
-    """
-    Accumulate a damage readout for the camera. This function 'reduces'
-    binary images (where 1 = damage, 0 = fine) by counting consecutive damaged
-    events on a per-pixel basis. The final returned image is roughly a count of
-    the number of consecutive shots that are damaged.
-    
-    If we see a damaged pixel, that pixel gets a +1, otherwise it gets a -1. 
-    No pixel can read below 0.
-    
-    Parameters
-    ----------
-    new : np.ndarray, binary
-        The new data to add to the accumulator
-        
-    old : np.ndarray, binary
-        The accumulator buffer
-        
-    Returns
-    -------
-    accumulated : np.ndarray, int
-        A damage reading for each pixel
-    
-    Notes
-    -----
-    This is the 'reduce' function.
-    """
-    
-    assert new.shape == old.shape, 'shape mismatch in reduce'
-
-    x = new + old
-
-    # same as : x[ x < 0 ] = 0, but faster
-    x += np.abs(x)
-    x /= 2
-
-    return x
+from core import MapReducer, ShutdownInterrupt
 
 
 class ShutterControl(object):
@@ -131,9 +22,12 @@ class ShutterControl(object):
     -----
     This is the 'action' function.
     """
+    
+    self._ds1_src = psana.Source('DetInfo(CxiDs1.0:Cspad.0)')
+    self._ds2_src = psana.Source('DetInfo(CxiDs2.0:Cspad.0)')
 
     
-    def __init__(self, consecutive_threshold, area_threshold, debug_mode=False):
+    def __init__(self, threshold, debug_mode=False):
         """
         Initialize a shutter control. This control detects damaged CSPAD events
         and, if enough damage (as specified by the user) is found, closes the
@@ -141,11 +35,7 @@ class ShutterControl(object):
         
         Parameters
         ----------
-        consecutive_threshold : int
-            The number of consecutive damaged events that must occur before the
-            trigger to close the shutter is thrown
-            
-        area_threshold : int
+        threshold : int
             The number of pixels on the CSPAD that must be damaged before tbe
             trigger to close the shutter is thrown
             
@@ -154,45 +44,33 @@ class ShutterControl(object):
             messages.
         """
 
-        self.consecutive_threshold = consecutive_threshold
-        self.area_threshold = area_threshold
+        self.threshold = threshold
 
         self._control = epics.PV('CXI:R52:EVR:01:TRIG2:TPOL')
 
         self.debug_mode = debug_mode
-        self._zmq_ready = 0 # don't use any ZMQ if not necessary
+        self._zmq_ready = 0
 
         return
     
 
-    def __call__(self, camera_damage_image):
+    def __call__(self, num_damaged_pixels):
         """
-        Based on a CSPAD image, decide whether to keep the shutter open or 
-        closed.
+        Based on a CSPAD damage count, decide whether to shutter the beam.
         
         Parameters
         ----------
-        camera_damage_image : np.ndarray, int
-            An `accumulated` CSPAD image, where the pixel values indicate a
-            running count of the number of damaged events at that pixel.
-            
-        See Also
-        --------
-        accumulate_damage : function
-            The function that generates images that should be passed to this
-            function.
+        num_damaged_pixels : int
+            The number of damaged pixels on the CSPAD.
         """
 
         s = time.time()
 
-        self.num_overloaded_pixels = np.sum( camera_damage_image > self.consecutive_threshold )
-        #num_overloaded_pixels = np.sum( (camera_damage_image / self.consecutive_threshold).astype(np.int) )
-
-        if self.num_overloaded_pixels > self.area_threshold:
+        if num_damaged_pixels > self.threshold:
             print ''
             print '*** THRESHOLD EXCEEDED ***'
-            print '%d pixels over threshold (%d)' % (self.num_overloaded_pixels,
-                                                     self.area_threshold)
+            print '%d pixels over threshold (%d)' % (num_damaged_pixels,
+                                                     self.threshold)
             print ''
 
             if self.status == 'open':
@@ -201,40 +79,8 @@ class ShutterControl(object):
                 print 'Shutter already closed'
 
         return
-
-
-    def publish_stats(self, master_stats={}):
-        """
-        Publish statistics to a monitoring process.
-        """
-
-        #if not self._zmq_ready:
-        #    self.init_zmq()
-
-        #stats = {
-        #         'ds1_damage'      : array, (self.num_overloaded_pixels)
-        #         'ds2_damage'      : array, (self.num_overloaded_pixels)
-        #         'xtal_hitrate'    : array,
-        #         'diffuse_hitrate' : array
-        #        }
-
-        #stats.update(master_stats)
-        #print 'from action:', stats
-        #self._zmq_socket.send(stats)
-
-        print 'publishing data to monitor...'
-
-        return
-
-
-    def init_zmq(self, port=4747):
-        self._zmq_ready = 1
-        self._zmq_context = zmq.Context()
-        self._zmq_socket  = self._zmq_context.socket(zmq.PUB)
-        self._zmq_socket.bind('tcp://*:%s' % port)
-        return
-
     
+        
     @property
     def status(self):
         if self._control.get():
@@ -299,39 +145,426 @@ class ShutterControl(object):
         return True
 
 
-class GuardianMonitor(object):
+class CxiGuardian(MapReducer):
     """
-    Generates a visual display of the Guardian.
+    Contains the message passing interface between shmem and the GUI.
     """
-
-    def __init__(self, port=4747):
+    
+    
+    _ds1_src = psana.Source('DetInfo(CxiDs1.0:Cspad.0)')
+    _ds2_src = psana.Source('DetInfo(CxiDs2.0:Cspad.0)')
+    
+    
+    def __init__(self, monitors=[], window_size=120, history_size=300):
+        """
+        Start an instance of the CXI CSPAD Guardian.
         
-        self._zmq_context = zmq.Context()
-        self._zmq_socket  = self._zmq_context.socket(zmq.SUB)
-        self._zmq_socket.connect('tcp://localhost:%s' % port)
-
-        #self._app = QtGui.QApplication([])
-        #pg.mkQApp()
-
-        #self._widget = pg.PlotWidget()
-        #self._widget.show()
-
-
+        Parameters
+        ----------
+        """
+        
+        
+        # a "monitor" is defined by 3 parameters stored in order in the 
+        # following lists
+        self._monitor_names   = []
+        self._adu_thresholds  = []
+        self._area_thresholds = []
+        
+        self.shutter_control = lambda x : None # placeholder
+        
+        for m in monitors:
+            self.add_monitor(*m)
+        
+        # init the MapReduce class
+        super(Guardian, self).__init__(self.threshold_and_count, # map
+                                       self.reduce,
+                                       self.action,
+                                       result_buffer=results_buffer)
+        self._use_array_comm = True
+        
+        # set key parameters
+        self._history_size = history_size
+        self._window_size = window_size
+        
         return
-
+    
+        
     def start(self):
-
-        plot_buffer = []
-
-        while True:
-            stats = self._zmq_socket.recv()
-            pg.plot(plot_buffer)
-            pg.show()
-
+        if self.num_monitors > 0:
+            super(Guardian, self).start()
+        else:
+            raise RuntimeError('Need at least one monitor active before you can'
+                               ' start the Guardian')
         return
 
 
+    def add_monitor(self, name, adu_threshold, area_threshold, 
+                    is_damage_control=False):
+                    
+        # may want to check threshold sanity
         
+        self._monitor_names.append(name)
+        self._adu_thresholds.append(adu_threshold)
+        self._area_thresholds.append(area_threshold)
+        
+        if is_damage_control:
+            self.shutter_control = ShutterControl(adu_threshold)
+            self._damage_control_index = len(self._monitor_names)
+        
+        # initialize buffers
+        self._init_hitrate_buffer()
+        self._init_history_buffer()
+        
+        result_buffer = np.zeros((self.window_size,
+                                  self.num_monitors,
+                                  self.num_cameras),
+                                 dtype=np.int)
+        self._result = np.zeros_like(result_buffer)
+        self._buffer = result_buffer
+            
+        return
+    
+    
+    def set_monitor_thresholds(self, name, adu_threshold, area_threshold):
+        
+        # may want to check threshold sanity
+        
+        if name not in self.monitor_names:
+            raise KeyError('Monitor: %s not registered yet, cannot update '
+                           'threshold values')
+        else:
+            mon_index = np.where( np.array(self.monitor_names) == name )[0][0]
+        
+        self._adu_thresholds[mon_index]  = adu_threshold
+        self._area_thresholds[mon_index] = area_threshold
+        
+        return
+    
+    
+    def set_damage_adu_threshold(self, threshold):
+        if isinstance(self.shutter_control, ShutterControl):
+            self.shutter_control.threshold = threshold
+        else:
+            raise TypeError('shutter control not initialized')
+        return
+    
+    
+    def set_damage_monitor(self, name):
+        if name not in self.monitor_names:
+            raise KeyError('Monitor: %s not registered yet, cannot update '
+                           'threshold values')
+        else:
+            self._damage_control_index = int( np.where( np.array(self.monitor_names) == name )[0][0] )
+        return
+    
+
+    @property
+    def monitor_names(self):
+        return self._monitor_names
+
+    @property        
+    def adu_thresholds(self):
+        return self._adu_thresholds
+        
+    @property
+    def area_thresholds(self):
+        return self._area_thresholds
+        
+    @property 
+    def num_monitors(self):
+        return len(self.monitor_names)
+        
+    @property
+    def num_cameras(self):
+        return 2
+        
+    @property
+    def history_size(self):
+        return self._history_size
+        
+    @property
+    def window_size(self):
+        return self._window_size
+        
+    # ------------
+    # COMMUNICATIONS
+    #
+    
+    def init_zmq(self, pub_port=4747, pull_port=4748):
+        """
+        Initialize the ZMQ protocol, preparing the class for inter-process
+        communication.
+        """
+
+        self._zmq_context = zmq.Context()
+
+        self._zmq_pull = self._zmq_context.socket(zmq.PULL)
+        self._zmq_pull.bind('tcp://localhost:%s' % pull_port)
+
+        self._zmq_publisher = self._zmq_context.socket(zmq.PUB)
+        self._zmq_publisher.bind('tcp://*:%s' % port)
+
+        self._zmq_ready = 1
+
+        return
+    
+        
+    @property
+    def stats(self):
+        """
+        Return a dictoray of statistics about the running properties of the
+        Guardian.
+        """
+        
+        stats = {}
+        
+        # insert the values for some key parameters into stats
+        properties = ['monitor_names',
+                      'adu_thresholds',
+                      'area_thresholds',
+                      'num_monitors',
+                      'num_cameras',
+                      'history_size',
+                      'window_size']
+                      
+        for p in properties:
+            stats[p] = self.__dict__[p]
+            
+        # also throw in specifics
+        stats['hitrates'] = self._hitrate_buffer
+        
+        if isinstance(self.shutter_control, ShutterControl):
+            stats['shutter_control_threshold'] = self.shutter_control.threshold
+
+        # add stats reported by the MapReduce class (hosts, etc)
+        stats.update( super(Guardian, self).stats )
+
+        return stats
+        
+
+    def communicate(self):
+        """
+        Communicate with remote monitoring processes. This function:
+        
+            (1) Publishes statistics, broadcasting to any number of monitors
+            (2) Checks for remote messages asking for a change of state
+            
+        Parameters
+        ----------
+        stats : dict
+            Additional statistics to communicate. Should be keyed by a string
+            describing the value.
+        """
+
+        if not self._zmq_ready:
+           self.init_zmq()
+
+
+        # ---- publish data widely (to monitors)
+        self._zmq_socket.send(self.stats)
+        
+        
+        # ---- check for remote messages and take action
+        try:
+            msg = self._zmq_pull(zmq.NOBLOCK)
+        except zmq.Again as e:
+            pass # this means no new message
+            
+        # parse the message...
+        if msg == 'shutdown':
+            self._shutdown(msg='remote monitor process requested shutdown')
+            
+        # change-of-state messages are expected to be of the form "key : value"
+        # elif msg.find('set_consecutive_threshold') == 0:
+        #     self. = int(msg.split(':')[1])
+            
+        else:
+            raise RuntimeError('Remote message not understood: %s' % msg)
+
+        return
+        
+        
+    def _shutdown(self, msg=''):
+        """
+        Throw an exception capable of taking down the entire MPI process.
+        """
+        raise ShutdownInterrupt('Calling for MPI shutdown :: %s' % msg)
+        return
+        
+    # ------------
+    # MAP functionality
+    # 
+    
+    @staticmethod
+    def digitize(x, bins, overwrite=True):
+        """
+        Similar to np.digitize, but faster, I hope. Bins must be monotonic.
+        """
+        
+        if not overwrite:
+            y = np.zeros(x.shape, dtype=np.int)
+        else:
+            y = x
+        
+        for i,b in enumerate(bins):
+            y[ y > b] = i
+        
+        if overwrite:
+            y = y.astype(np.int)
+        
+        return y
+    
+        
+    def threshold_and_count(self, psana_event):
+        """
+        Threshold an image, setting values to +/- 1, for above/below the
+        threshold value, respectively.
+
+        Parameters
+        ----------
+        psana_event : psana.Event
+            A psana event to extract images from and threshold
+
+        Returns
+        -------
+        pixel_counts : np.ndarray
+            An N x 2 array. N is the number of thresholds. The first column is
+            for the DS1 camera, the second is for DS2.
+
+        Notes
+        -----
+        This is the 'map' function.
+        """
+        
+        pixel_counts = np.zeros((len(thresholds), 2), dtype=np.int)
+        
+        # we need the thresholds in monotonic order for self.digitize
+        threshold_order = np.argsort(self.adu_thresholds)
+        b = thresholds[threshold_order]
+        
+        ds1 = psana_event.get(psana.CsPad.DataV2, self._ds1_src)
+        ds2 = psana_event.get(psana.CsPad.DataV2, self._ds2_src)
+
+        if not ds1:
+            pass
+        else:
+            ds1_image = np.vstack([ ds1.quads(i).data() for i in range(4) ])
+            pixel_counts[:,0] = np.bincount( self.digitize(ds1_image, b) )
+
+        if not ds2:
+            pass
+        else:
+            ds2_image = np.vstack([ ds2.quads(i).data() for i in range(4) ])
+            pixel_counts[:,1] = np.bincount( self.digitize(ds2_image, b) )
+
+        # put things back in their original order
+        reverse_map = np.argsort(threshold_order)
+        pixel_counts = pixel_counts[reverse_map,:]
+        
+        return pixel_counts
+
+    # ------------
+    # REDUCE functionality
+    
+    def _init_hitrate_buffer(self):
+        """
+        The buffer is dimesion (N, M, 2):
+        
+            ( buffer length, num ADU thresholds, number of cameras [ds1 & ds2] )
+            
+        """
+        nt = self.num_monitors
+        ws = self.window_size
+        self._hitrate_buffer = np.zeros((ws, nt, 2), dtype=np.int)
+        return
+        
+
+    def compute_hitrate(self, pixel_counts):
+        """
+        Compute a running average of the hitrate over the last `self.window_size`
+        shots.
+        
+        Parameters
+        ----------
+        pixel_counts : np.ndarray
+            The output of the method `threshold_and_count`. An N x 2 array. N 
+            is the number of thresholds. The first column is for the DS1 camera,
+            the second is for DS2.
+            
+        Returns
+        -------
+        hitrate : np.ndarray
+            The hitrate measured on each detector. An N x 2 array. N is the 
+            number of thresholds. The first column is for the  DS1 camera, the 
+            second is for DS2.
+        """
+        
+        assert self._hitrate_buffer.shape[1:] == pixel_counts.shape
+        assert pixel_counts.shape[0] == len(self.areas)
+        
+        self._hitrate_buffer = np.roll(self._hitrate_buffer, 1, axis=0)
+        
+        # for each data type (diffuse/xtal/damage), compute if this shot is
+        # a hit or not (is hit if there are a sufficient number of pixels above
+        # the "area" threshold) and store that value in a running buffer
+        
+        for i in range( pixel_counts.shape[0] ):
+            self._hitrate_buffer[0,i,:] = pixel_counts[i,:] > self.areas[i]
+        
+        hitrate = np.mean(self._hitrate_buffer, axis=0)
+        
+        return hitrate
+    
+        
+    def reduce(self, pixel_counts):
+        """
+        """
+        damaged_pixels = pixel_counts[self._damage_control_index,:]
+        hitrate = compute_hitrate(pixel_counts)
+        return damaged_pixels, hitrate
+    
+        
+    # ------------
+    # ACTION functionality
+    #
+    
+    def _init_history_buffer(self):
+        """
+        The buffer is dimesion (N, M, 2):
+        
+            ( buffer length, num thresholds, number of cameras [ds1 & ds2] )
+            
+        """
+        nt = self.num_monitors
+        ws = self.history_size
+        self._history_buffer = np.zeros((ws, nt, 2), dtype=np.int)
+        return
+    
+        
+    def action(self, args):
+        """
+        """
+        
+        damaged_pixels = args[0]
+        hitrate        = args[1]
+
+        # check for detector damage and shutter the beam if necessary
+        for dp in damaged_pixels:
+            self.shutter_control(dp)
+        
+        # insert hitrate values into the history buffer
+        assert hitrate.shape == self._history_buffer.shape[1:]
+        self._history_buffer = np.roll(self._history_buffer, 1, axis=0)
+        self._history_buffer[0,:,:] = hitrate
+        
+        # if we're at at 
+        if self.num_reduced_events % self._analysis_frequency == 0:
+            self.communicate()
+        
+        return
+        
+        
+
 def run(adu_threshold, consecutive_threshold, area_threshold):
     """
     Run the CSPAD guardian. This starts up an infinite loop that looks for
