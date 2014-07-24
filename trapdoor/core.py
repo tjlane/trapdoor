@@ -299,9 +299,6 @@ class MapReducer(OnlinePsana):
                 if verbose:
                     print 'Starting array-enabled master (r%d)' % MPI_RANK
             
-                if self._use_array_comm:
-                    self._buffer = np.zeros_like(self._result)
-           
                 req = None 
                 while self.running:
                     if req: req.Wait()

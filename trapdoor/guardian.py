@@ -168,10 +168,10 @@ class CxiGuardian(MapReducer):
             self.add_monitor(*m)
         
         # init the MapReduce class
-        super(CxiGuardian, self).__init__(self.threshold_and_count, # map fxns
-                                       self.reduce,
-                                       self.action,
-                                       source='cxishmem')
+        super(CxiGuardian, self).__init__(self.map,
+                                          self.reduce,
+                                          self.action,
+                                          source='cxishmem')
         self._use_array_comm = True
         
         # set key parameters
@@ -204,14 +204,15 @@ class CxiGuardian(MapReducer):
             self._damage_control_index = len(self._monitor_names)
         
         # initialize buffers
-        self._init_hitrate_buffer()
         self._init_history_buffer()
         
-        result_buffer = np.zeros((self.num_monitors,
-                                  self.num_cameras),
-                                 dtype=np.int)
-        self._result = np.zeros_like(result_buffer)
-        self._buffer = result_buffer
+        self._result = np.zeros(( self.window_size, 
+                                  self.num_monitors,
+                                  self.num_cameras ),
+                                dtype=np.int)
+        self._buffer = np.zeros(( self.num_monitors,
+                                  self.num_cameras ),
+                                dtype=np.int)
             
         return
     
@@ -322,7 +323,7 @@ class CxiGuardian(MapReducer):
             stats[p] = self.__dict__[p]
             
         # also throw in specifics
-        stats['hitrates'] = self._hitrate_buffer
+        stats['hitrates'] = self._result
         
         if isinstance(self.shutter_control, ShutterControl):
             stats['shutter_control_threshold'] = self.shutter_control.threshold
@@ -391,6 +392,9 @@ class CxiGuardian(MapReducer):
         """
         Similar to np.digitize, but faster, I hope. Bins must be monotonic.
         """
+
+        if type(bins) == int:
+            bins = [bins]
         
         if not overwrite:
             y = np.zeros(x.shape, dtype=np.int)
@@ -398,12 +402,21 @@ class CxiGuardian(MapReducer):
             y = x
         
         for i,b in enumerate(bins):
-            y[ y > b] = i
+            y[ y > b] = i + 1
+            if i == 0:
+                y[y <= b] = 0
         
         if overwrite:
             y = y.astype(np.int)
         
         return y
+
+
+    def count_pixels_over_threshold(self, image, bins):
+        image = image.flatten()
+        pixel_counts = np.bincount( np.digitize(image, bins) )[1:]
+        assert pixel_counts.shape[0] == len(bins), '%d %d' % (pixel_counts.shape[0], len(bins))
+        return pixel_counts
     
         
     def check_for_damage(self, pixel_counts):
@@ -418,7 +431,7 @@ class CxiGuardian(MapReducer):
         return
     
         
-    def threshold_and_count(self, psana_event):
+    def map(self, psana_event):
         """
         Threshold an image, setting values to +/- 1, for above/below the
         threshold value, respectively.
@@ -433,17 +446,14 @@ class CxiGuardian(MapReducer):
         pixel_counts : np.ndarray
             An N x 2 array. N is the number of thresholds. The first column is
             for the DS1 camera, the second is for DS2.
-
-        Notes
-        -----
-        This is the 'map' function.
         """
         
         pixel_counts = np.zeros((self.num_monitors, 2), dtype=np.int)
         
         # we need the thresholds in monotonic order for self.digitize
         threshold_order = np.argsort(self.adu_thresholds)
-        b = thresholds[threshold_order]
+        b = self.adu_thresholds[threshold_order]
+        if type(b) == int: b = [b,]
         
         ds1 = psana_event.get(psana.CsPad.DataV2, self._ds1_src)
         ds2 = psana_event.get(psana.CsPad.DataV2, self._ds2_src)
@@ -452,13 +462,13 @@ class CxiGuardian(MapReducer):
             pass
         else:
             ds1_image = np.vstack([ ds1.quads(i).data() for i in range(4) ])
-            pixel_counts[:,0] = np.bincount( self.digitize(ds1_image, b) )
+            pixel_counts[:,0] = self.count_pixels_over_threshold(ds1_image, b)
 
         if not ds2:
             pass
         else:
             ds2_image = np.vstack([ ds2.quads(i).data() for i in range(4) ])
-            pixel_counts[:,1] = np.bincount( self.digitize(ds2_image, b) )
+            pixel_counts[:,1] = self.count_pixels_over_threshold(ds2_image, b)
 
         # put things back in their original order
         reverse_map = np.argsort(threshold_order)
@@ -475,18 +485,6 @@ class CxiGuardian(MapReducer):
     # ------------
     # REDUCE functionality
     
-    def _init_hitrate_buffer(self):
-        """
-        The buffer is dimesion (N, M, 2):
-        
-            ( buffer length, num ADU thresholds, number of cameras [ds1 & ds2] )
-            
-        """
-        nt = self.num_monitors
-        ws = self.window_size
-        self._hitrate_buffer = np.zeros((ws, nt, 2), dtype=np.int)
-        return
-    
 
     def reduce(self, pixel_counts, hitrate_buffer):
         """
@@ -496,7 +494,7 @@ class CxiGuardian(MapReducer):
         """
         
         assert hitrate_buffer.shape[1:] == pixel_counts.shape, '%s %s' \
-                  % (str(hitrate_buffer.shape[1:]), str(pixel_counts.shape))
+                  % (str(hitrate_buffer.shape), str(pixel_counts.shape))
         
         # roll the buffer over, we'll replace the first entry in a moment
         hitrate_buffer = np.roll(hitrate_buffer, 1, axis=0)
