@@ -17,14 +17,6 @@ from core import MapReducer, ShutdownInterrupt
 
 
 class ShutterControl(object):
-    """    
-    Notes
-    -----
-    This is the 'action' function.
-    """
-    
-    self._ds1_src = psana.Source('DetInfo(CxiDs1.0:Cspad.0)')
-    self._ds2_src = psana.Source('DetInfo(CxiDs2.0:Cspad.0)')
 
     
     def __init__(self, threshold, debug_mode=False):
@@ -176,10 +168,11 @@ class CxiGuardian(MapReducer):
             self.add_monitor(*m)
         
         # init the MapReduce class
-        super(Guardian, self).__init__(self.threshold_and_count, # map
+        super(Guardian, self).__init__(self.threshold_and_count, # map fxns
                                        self.reduce,
                                        self.action,
-                                       result_buffer=results_buffer)
+                                       result_buffer=results_buffer,
+                                       source='cxishmem')
         self._use_array_comm = True
         
         # set key parameters
@@ -710,15 +703,16 @@ def run_mpi(adu_threshold, consecutive_threshold, area_threshold,
     
     return
 
+
+def test_guardian():
+
+    g = CxiGuardian()
+    g.add_monitor('test_monitor', 5, 5)
+    g._source = 'exp=cxia4113:run=30' # overwrite from shmem for testing
+    g.start()
+
         
 if __name__ == '__main__':
-    
-    # these are some default values for testing purposes only
-    
-    adu_threshold         = 5000
-    consecutive_threshold = 5
-    area_threshold        = 30
-    
-    run(adu_threshold, consecutive_threshold, area_threshold)
+    test_guardian()
     
 
