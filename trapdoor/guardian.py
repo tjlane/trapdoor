@@ -406,6 +406,18 @@ class CxiGuardian(MapReducer):
         return y
     
         
+    def check_for_damage(self, pixel_counts):
+        """
+        Check for detector damage and shutter the beam if necessary
+        """
+        
+        damaged_pixels = pixel_counts[self._damage_control_index,:]
+        for dp in damaged_pixels:
+           self.shutter_control(dp)
+        
+        return
+    
+        
     def threshold_and_count(self, psana_event):
         """
         Threshold an image, setting values to +/- 1, for above/below the
@@ -454,6 +466,10 @@ class CxiGuardian(MapReducer):
 
         assert pixel_counts.shape == (len(thresholds), 2)
         
+        # check for damage
+        if hasattr(self, '_damage_control_index'):
+            self.check_for_damage(pixel_counts)
+        
         return pixel_counts
 
     # ------------
@@ -470,27 +486,28 @@ class CxiGuardian(MapReducer):
         ws = self.window_size
         self._hitrate_buffer = np.zeros((ws, nt, 2), dtype=np.int)
         return
-        
+    
 
     def reduce(self, pixel_counts, hitrate_buffer):
         """
+        Compute the if pixel_counts are a hit
+        Rolls the hitrate buffer
+        Stores the hitrate
         """
         
-        #assert self._hitrate_buffer.shape[1:] == pixel_counts.shape, '%s %s' \
-        #           % (str(self._hitrate_buffer.shape[1:]), str(pixel_counts.shape))
+        assert hitrate_buffer.shape[1:] == pixel_counts.shape, '%s %s' \
+                  % (str(hitrate_buffer.shape[1:]), str(pixel_counts.shape))
         
-        hitrate_buffer = np.roll(self._hitrate_buffer, 1, axis=0)
+        # roll the buffer over, we'll replace the first entry in a moment
+        hitrate_buffer = np.roll(hitrate_buffer, 1, axis=0)
         
         # for each data type (diffuse/xtal/damage), compute if this shot is
         # a hit or not (is hit if there are a sufficient number of pixels above
         # the "area" threshold) and store that value in a running buffer
-        
         for i in range(self.num_monitors):
-            self._hitrate_buffer[0,i,:] = pixel_counts[i,:] > self._area_thresholds[i]
+            hitrate_buffer[0,i,:] = pixel_counts[i,:] > self._area_thresholds[i]
         
-        hitrate = np.mean(self._hitrate_buffer, axis=0)
-        
-        return hitrate
+        return hitrate_buffer
     
         
     # ------------
@@ -510,30 +527,21 @@ class CxiGuardian(MapReducer):
         return
     
         
-    def action(self, pixel_counts):
+    def action(self, hitrate_buffer):
         """
+        Roll over the history buffer
+        Communicate with the world
         """
         
-        #damaged_pixels = args[0]
-        #hitrate        = args[1]
-
-        #print 'action', pixel_counts.shape
-        #if hasattr(self, '_damage_control_index'):
-        #    damaged_pixels = pixel_counts[self._damage_control_index,:]
-        #else:
-        #    damaged_pixels = []
-        #hitrate = self.compute_hitrate(pixel_counts)
-
-        # check for detector damage and shutter the beam if necessary
-        #for dp in damaged_pixels:
-        #    self.shutter_control(dp)
+        # compute the hitrate for the last few shots
+        hitrate = np.mean(hitrate_buffer, axis=0)
         
         # insert hitrate values into the history buffer
         assert hitrate.shape == self._history_buffer.shape[1:]
         self._history_buffer = np.roll(self._history_buffer, 1, axis=0)
         self._history_buffer[0,:,:] = hitrate
         
-        # if we're at at 
+        # periodically communicate the results
         if self.num_reduced_events % self._analysis_frequency == 0:
             self.communicate()
         
