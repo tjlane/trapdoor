@@ -320,21 +320,21 @@ class MapReducer(OnlinePsana):
                                 self.action.publish_stats(master_stats=self.stats)
  
 
-                    except KeyboardInterrupt as e:
-                        print 'Recieved keyboard sigterm...'
-                        print e
-                        print 'shutting down MPI.'
-                        self.shutdown()
-                        print '---> execution finished'
-                        sys.exit(0)
-                        
-                    except ShutdownInterrupt as e:
-                        print 'Recieved shutdown call...'
-                        print e
-                        print 'shutting down MPI.'
-                        self.shutdown()
-                        print '---> execution finished'
-                        sys.exit(0)
+            except KeyboardInterrupt as e:
+                print 'Recieved keyboard sigterm...'
+                print e
+                print 'shutting down MPI.'
+                self.shutdown()
+                print '---> execution finished'
+                sys.exit(0)
+                
+            except ShutdownInterrupt as e:
+                print 'Recieved shutdown call...'
+                print e
+                print 'shutting down MPI.'
+                self.shutdown()
+                print '---> execution finished'
+                sys.exit(0)
                         
                 
         return                  
