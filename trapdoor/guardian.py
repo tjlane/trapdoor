@@ -439,7 +439,7 @@ class CxiGuardian(MapReducer):
         This is the 'map' function.
         """
         
-        pixel_counts = np.zeros((len(thresholds), 2), dtype=np.int)
+        pixel_counts = np.zeros((self.num_monitors, 2), dtype=np.int)
         
         # we need the thresholds in monotonic order for self.digitize
         threshold_order = np.argsort(self.adu_thresholds)
@@ -464,7 +464,7 @@ class CxiGuardian(MapReducer):
         reverse_map = np.argsort(threshold_order)
         pixel_counts = pixel_counts[reverse_map,:]
 
-        assert pixel_counts.shape == (len(thresholds), 2)
+        assert pixel_counts.shape == (self.num_monitors, 2)
         
         # check for damage
         if hasattr(self, '_damage_control_index'):
