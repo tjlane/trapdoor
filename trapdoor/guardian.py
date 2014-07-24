@@ -168,10 +168,9 @@ class CxiGuardian(MapReducer):
             self.add_monitor(*m)
         
         # init the MapReduce class
-        super(Guardian, self).__init__(self.threshold_and_count, # map fxns
+        super(CxiGuardian, self).__init__(self.threshold_and_count, # map fxns
                                        self.reduce,
                                        self.action,
-                                       result_buffer=results_buffer,
                                        source='cxishmem')
         self._use_array_comm = True
         
@@ -184,7 +183,7 @@ class CxiGuardian(MapReducer):
         
     def start(self):
         if self.num_monitors > 0:
-            super(Guardian, self).start()
+            super(CxiGuardian, self).start()
         else:
             raise RuntimeError('Need at least one monitor active before you can'
                                ' start the Guardian')
@@ -208,8 +207,7 @@ class CxiGuardian(MapReducer):
         self._init_hitrate_buffer()
         self._init_history_buffer()
         
-        result_buffer = np.zeros((self.window_size,
-                                  self.num_monitors,
+        result_buffer = np.zeros((self.num_monitors,
                                   self.num_cameras),
                                  dtype=np.int)
         self._result = np.zeros_like(result_buffer)
@@ -330,7 +328,7 @@ class CxiGuardian(MapReducer):
             stats['shutter_control_threshold'] = self.shutter_control.threshold
 
         # add stats reported by the MapReduce class (hosts, etc)
-        stats.update( super(Guardian, self).stats )
+        stats.update( super(CxiGuardian, self).stats )
 
         return stats
         
@@ -453,6 +451,8 @@ class CxiGuardian(MapReducer):
         # put things back in their original order
         reverse_map = np.argsort(threshold_order)
         pixel_counts = pixel_counts[reverse_map,:]
+
+        assert pixel_counts.shape == (len(thresholds), 2)
         
         return pixel_counts
 
@@ -472,49 +472,25 @@ class CxiGuardian(MapReducer):
         return
         
 
-    def compute_hitrate(self, pixel_counts):
+    def reduce(self, pixel_counts, hitrate_buffer):
         """
-        Compute a running average of the hitrate over the last `self.window_size`
-        shots.
-        
-        Parameters
-        ----------
-        pixel_counts : np.ndarray
-            The output of the method `threshold_and_count`. An N x 2 array. N 
-            is the number of thresholds. The first column is for the DS1 camera,
-            the second is for DS2.
-            
-        Returns
-        -------
-        hitrate : np.ndarray
-            The hitrate measured on each detector. An N x 2 array. N is the 
-            number of thresholds. The first column is for the  DS1 camera, the 
-            second is for DS2.
         """
         
-        assert self._hitrate_buffer.shape[1:] == pixel_counts.shape
-        assert pixel_counts.shape[0] == len(self.areas)
+        #assert self._hitrate_buffer.shape[1:] == pixel_counts.shape, '%s %s' \
+        #           % (str(self._hitrate_buffer.shape[1:]), str(pixel_counts.shape))
         
-        self._hitrate_buffer = np.roll(self._hitrate_buffer, 1, axis=0)
+        hitrate_buffer = np.roll(self._hitrate_buffer, 1, axis=0)
         
         # for each data type (diffuse/xtal/damage), compute if this shot is
         # a hit or not (is hit if there are a sufficient number of pixels above
         # the "area" threshold) and store that value in a running buffer
         
-        for i in range( pixel_counts.shape[0] ):
-            self._hitrate_buffer[0,i,:] = pixel_counts[i,:] > self.areas[i]
+        for i in range(self.num_monitors):
+            self._hitrate_buffer[0,i,:] = pixel_counts[i,:] > self._area_thresholds[i]
         
         hitrate = np.mean(self._hitrate_buffer, axis=0)
         
         return hitrate
-    
-        
-    def reduce(self, pixel_counts):
-        """
-        """
-        damaged_pixels = pixel_counts[self._damage_control_index,:]
-        hitrate = compute_hitrate(pixel_counts)
-        return damaged_pixels, hitrate
     
         
     # ------------
@@ -534,16 +510,23 @@ class CxiGuardian(MapReducer):
         return
     
         
-    def action(self, args):
+    def action(self, pixel_counts):
         """
         """
         
-        damaged_pixels = args[0]
-        hitrate        = args[1]
+        #damaged_pixels = args[0]
+        #hitrate        = args[1]
+
+        #print 'action', pixel_counts.shape
+        #if hasattr(self, '_damage_control_index'):
+        #    damaged_pixels = pixel_counts[self._damage_control_index,:]
+        #else:
+        #    damaged_pixels = []
+        #hitrate = self.compute_hitrate(pixel_counts)
 
         # check for detector damage and shutter the beam if necessary
-        for dp in damaged_pixels:
-            self.shutter_control(dp)
+        #for dp in damaged_pixels:
+        #    self.shutter_control(dp)
         
         # insert hitrate values into the history buffer
         assert hitrate.shape == self._history_buffer.shape[1:]
@@ -704,15 +687,28 @@ def run_mpi(adu_threshold, consecutive_threshold, area_threshold,
     return
 
 
-def test_guardian():
+def test_guardian1():
 
     g = CxiGuardian()
     g.add_monitor('test_monitor', 5, 5)
     g._source = 'exp=cxia4113:run=30' # overwrite from shmem for testing
     g.start()
 
+    return
+
+
+def test_guardian2():
+
+    g = CxiGuardian()
+    g.add_monitor('test_monitor', 5, 5, is_damage_control=True)
+    g._source = 'exp=cxia4113:run=30' # overwrite from shmem for testing
+    g.start()
+
+    return
+
         
 if __name__ == '__main__':
-    test_guardian()
+    test_guardian1()
+    #test_guardian2()
     
 
