@@ -20,19 +20,28 @@ class TrapdoorWidget(QtGui.QWidget):
     launched processes.
     """
     
+    colors = ['r', 'g', 'y']
+    
     def __init__(self):
         
         super(TrapdoorWidget, self).__init__()
+        
         self.setWindowTitle('Trapdoor: CSPAD Monitoring')
         self._init_zmq()
         self._draw_canvas()
         
         return
+        
+        
+    @property
+    def threshold_names(self):
+        # this is fixed for now, but I want to make it expandable later...
+        return ['damage', 'xtal', 'diffuse']
     
         
     @property
     def monitor_status(self):
-        #raise NotImplementedError()
+        # todo
         # should return one of: 'ready', 'running', 'unknown', ...
         return 'ready'
         
@@ -57,10 +66,26 @@ class TrapdoorWidget(QtGui.QWidget):
         return d
     
         
-    def _init_zmq(self, port=4747):
-        self._context = zmq.Context()
-        self._socket = self._context.socket(zmq.SUB)
-        self._socket.connect("tcp://localhost:%s" % port)
+    def _init_zmq(self, sub_port=4747, push_port=4748):
+        
+        self._zmq_context = zmq.Context()
+        
+        self._zmq_sub = self._zmq_context.socket(zmq.SUB)
+        self._zmq_sub.connect("tcp://127.0.0.1:%s" % sub_port)
+        
+        self._zmq_pusher = self._zmq_context.socket(zmq.PUSH)
+        self._zmq_pusher.bind('tcp://*:%s' % push_port)
+        
+        return
+    
+        
+    def _send_zmq_message(self, identifier, msg):
+        """
+        Sends the message `msg` to an active monitor using a ZMQ push. The idea
+        is that `identifier` tells the remote process what to do with the data
+        in `msg`.
+        """
+        self._zmq_push((identifier, msg))
         return
     
         
@@ -69,56 +94,65 @@ class TrapdoorWidget(QtGui.QWidget):
         A catch-all function that draws all the sub-widgets that make up the GUI
         """
         
-        self._layout = QtGui.QGridLayout()
-        self.setLayout(self._layout)
-
-        self.show()
+        layout = QtGui.QGridLayout()
+        
         self.resize(1000, 600)
         
-        self._draw_plots()
-        self._draw_text_inputs()
-        self._draw_host_text()
-        self._draw_apply_button()
-        self._draw_launch_button()
-        self._draw_status_text()
+        self._draw_plots(layout)
+        self._draw_text_inputs(layout)
+        self._draw_host_text(layout)
+        self._draw_apply_button(layout)
+        self._draw_launch_button(layout)
+        self._draw_status_text(layout)
+        
+        self.setLayout(layout)
         
         return
     
         
-    def _draw_plots(self):
+    def _draw_plots(self, layout):
         """
         Draws two plots on the left hand side of the widget, one monitoring
         damage levels and one doing hitrate plotting.
         """
         
         graphics_layout = pg.GraphicsLayoutWidget(border=(100,100,100))
-        self._layout.addWidget(graphics_layout, 0, 0, 5, 1)
-
-        self._upper_plot  = graphics_layout.addPlot(title="CSPAD Damage Level")
+        
+        self._upper_plot = graphics_layout.addPlot(title="DS1")
         self._upper_plot.addLegend()
-        self._ds1_plot = self._upper_plot.plot(pen='g', name='DS1')
-        self._ds2_plot = self._upper_plot.plot(pen='y', name='DS2')
-        self._threshold_plot = self._upper_plot.plot(pen='r', name='Threshold')
+        
+        self._upper_curves = []
+        for i,n in enumerate( self.threshold_names ):
+            self._upper_curves.append( self._upper_plot.plot(name=n, pen=self.colors[i]) )
         
         graphics_layout.nextRow()
         
-        self._lower_plot   = graphics_layout.addPlot(title="Hit Rate")
+        self._lower_plot = graphics_layout.addPlot(title="DS2")
         self._lower_plot.addLegend()
-        self._xtal_plot    = self._lower_plot.plot(pen='g', name='xtal')
-        self._diffuse_plot = self._lower_plot.plot(pen='y', name='diffuse')
+        
+        self._lower_curves = []
+        for i,n in enumerate( self.threshold_names ):
+            self._lower_curves.append( self._lower_plot.plot(name=n, pen=self.colors[i]) )
+        
+        layout.addWidget(graphics_layout, 0, 0, 5, 1)
         
         return
     
         
-    def _draw_text_inputs(self):
+    def _draw_text_inputs(self, layout):
         """
         Generates a GUI that can accept parameter values.
         """
         
         params = [
-                  {'name': 'Saturation Threshold', 'type': 'int', 'value': 10000, 'suffix': 'ADU'},
-                  {'name': 'Area Threshold', 'type': 'int', 'value': 5, 'suffix': '%', 'limits': (0, 100)},
-                  {'name': 'Consecutive Shots', 'type': 'int', 'value': 5, 'limits': (1,120)}
+                  {'name': 'damage :: Saturation Threshold', 'type': 'int', 'value': 10000, 'suffix': 'ADU'},
+                  {'name': 'damage :: Area Threshold', 'type': 'int', 'value': 5, 'suffix': '%', 'limits': (0, 100)},
+                  
+                  {'name': 'xtal :: Saturation Threshold', 'type': 'int', 'value': 5000, 'suffix': 'ADU'},
+                  {'name': 'xtal :: Area Threshold', 'type': 'int', 'value': 1, 'suffix': '%', 'limits': (0, 100)},
+                  
+                  {'name': 'diffuse :: Saturation Threshold', 'type': 'int', 'value': 1000, 'suffix': 'ADU'},
+                  {'name': 'diffuse :: Area Threshold', 'type': 'int', 'value': 20, 'suffix': '%', 'limits': (0, 100)}
                  ]
 
         self._params = Parameter.create(name='params', type='group', children=params)
@@ -127,44 +161,56 @@ class TrapdoorWidget(QtGui.QWidget):
         t = ParameterTree()
         t.setParameters(self._params, showTop=False)
         
-        self._layout.addWidget(t, 0, 1)
+        layout.addWidget(t, 0, 1)
         
         return
     
         
-    def _draw_host_text(self):
+    def _draw_host_text(self, layout):
+        
         text = ['daq-cxi-dss07',
                 'daq-cxi-dss08',
                 'daq-cxi-dss09',
                 'daq-cxi-dss10',
                 'daq-cxi-dss11',
                 'daq-cxi-dss12']
-        text = ', '.join(text)
-        self._host_text_widget = QtGui.QTextEdit(text)
-        self._layout.addWidget(self._host_text_widget, 1, 1)
+        
+        self._host_text_widget = QtGui.QTextEdit(', \n'.join(text))
+        
+        layout.addWidget(self._host_text_widget, 1, 1)
+        
         return
         
 
-    def _draw_status_text(self):
+    def _draw_status_text(self, layout):
+        
         text = 'No current running processes....' + '\n' * 10
         self._status_text_widget = QtGui.QLabel(text)
-        self._layout.addWidget(self._status_text_widget, 2, 1)
+        
+        layout.addWidget(self._status_text_widget, 2, 1)
+        
         return
     
         
-    def _draw_apply_button(self):
+    def _draw_apply_button(self, layout):
+        
         self._apply_btn = QtGui.QPushButton('Apply Changes')
-        self._layout.addWidget(self._apply_btn, 3, 1)
         self._apply_btn.clicked.connect(self.apply_parameters)
         self._apply_btn.setStyleSheet("background-color: grey")
+        
+        layout.addWidget(self._apply_btn, 3, 1)
+        
         return
     
         
-    def _draw_launch_button(self):
+    def _draw_launch_button(self, layout):
+        
         self._launch_btn = QtGui.QPushButton('Launch')
-        self._layout.addWidget(self._launch_btn, 4, 1)
         self._launch_btn.clicked.connect(self._launch_toggle)
         self._launch_btn.setStyleSheet("background-color: green")
+        
+        layout.addWidget(self._launch_btn, 4, 1)
+        
         return
     
         
@@ -203,15 +249,12 @@ class TrapdoorWidget(QtGui.QWidget):
         return
     
         
-    def set_damage(self, ds1_data, ds2_data):
-        self._ds1_plot.setData(ds1_data)
-        self._ds2_plot.setData(ds2_data)
-        return
-    
-
-    def set_hitrate(self, xtal_hitrate, diffuse_hitrate):
-        self._xtal_plot.setData(xtal_hitrate)
-        self._diffuse_plot.setData(diffuse_hitrate)
+    def _set_plot_data(self, hitrates):
+        
+        for i,n in enumerate(self.threshold_names):
+            self._lower_curves[i].setData( hitrates[:,i,0] )
+            self._upper_curves[i].setData( hitrates[:,i,1] )
+            
         return
     
         
@@ -222,21 +265,26 @@ class TrapdoorWidget(QtGui.QWidget):
 
     def launch_monitor(self):
         
+        self.set_status_text('Launching monitor process...')
+        
         # retrieve the current values for each threshold from the text boxes
         p_dict = self.parameters
-        area_threshold = int(32 * 185 * 388 * p_dict['Area Threshold']) # value in px
         
         # this is going to spawn an MPI process that will broadcast messages
         # using ZMQ
-        guardain.run_mpi(p_dict['Saturation Threshold'],
-                         p_dict['Consecutive Shots'],
-                         area_threshold,
-                         self.hosts)
+        
+        # guardain.run_mpi(p_dict['Saturation Threshold'],
+        #                  p_dict['Consecutive Shots'],
+        #                  area_threshold,
+        #                  self.hosts)
+        
+        self.set_status_text('Monitor launched, waiting for reply.')
         
         return
 
 
     def shutdown_monitor(self):
+        self._send_zmq_message('shutdown', None)
         return
     
         
@@ -246,7 +294,7 @@ class TrapdoorWidget(QtGui.QWidget):
         """
 
         if self._changes_ready_to_transmit:
-            # todo : do the transmit
+            self._send_zmq_message('set_parameters', self.parameters)
             self._apply_btn.setStyleSheet("background-color: grey")
             self._changes_ready_to_transmit = 0
 
@@ -260,34 +308,81 @@ class TrapdoorWidget(QtGui.QWidget):
         """
         
         # get data from the monitor process
-        # we'll use a -1 to indicate something went wrong...
         mon_data = self._socket.recv()
-        minus_one_array = np.ones(60*5) * -1
         
-        self.set_damage(mon_data.get('ds1_damage', minus_one_array),
-                        mon_data.get('ds2_damage', minus_one_array))
-                        
-        self.set_hitrate(mon_data.get('xtal_hitrate',    minus_one_array),
-                         mon_data.get('diffuse_hitrate', minus_one_array))
-                         
+        # --> ensure names of threshold monitors match
+        num_monitors = mon_data.get('num_monitors', -1)
+        
+        if not mon_data['monitor_names'] == self.threshold_names:
+            print 'Threshold monitor mismatch between GUI and remote Guardian'
+            print 'GUI:    %s' % str(self.threshold_names)
+            print 'Remote: %d' % str(mon_data['monitor_names'])
+            raise RuntimeError('No known method exists to resolve mismatch conflict') # todo
+        
+        # --> ensure that the set parameters match 
+        local_parms = self.parameters
+        for i,n in enumerate( mon_data['monitor_names'] ):
+            remote_adu  = mon_data['adu_thresholds'][i]
+            remote_area = mon_data['area_thresholds'][i]
+            
+            if not remote_adu == local_parms['%s :: Saturation Threshold' % n]:
+                print 'ADU Threshold mismatch between GUI and remote (%d/%d)' % remote_adu, local_parms['%s :: Saturation Threshold' % n]
+                raise RuntimeError('No known method exists to resolve mismatch conflict') # todo
+                
+            if not remote_area == local_parms['%s :: Area Threshold' % n]:
+                print 'AREA Threshold mismatch between GUI and remote (%d/%d)' % (remote_area, local_parms['%s :: Area Threshold' % n])
+                raise RuntimeError('No known method exists to resolve mismatch conflict') # todo
+        
+            
+        # --> get metadata from the CxiGuardian cls
+        num_cameras  = mon_data.get('num_cameras', -1)
+        history_size = mon_data.get('history_size', -1) # not reported ATM
+        window_size  = mon_data.get('window_size', -1)  # not reported ATM
+        shutter_tshd = mon_data.get('shutter_control_threshold', -1)
+        
+
+        # --> get data about running processes from the MapReduce cls 
         num_procs        = mon_data.get('num_procs', -1)
         per_proc_rate    = mon_data.get('per_proc_rate', -1)
         evts_processed   = mon_data.get('evts_processed', -1)
-        
         try:
             num_active_hosts = len(mon_data['hosts'])
         except:
             num_active_hosts = -1
         
+            
+        # --> get damage/hitrate data
+        hitrates = mon_data['hitrates']
+
+        # compute hitrates over the last minute
+        one_min_hitrate = {}
+        one_min_index = int(60.0 * window_size / 120.0)
+        for i,n in enumerate( mon_data['monitor_names'] ):
+            one_min_hitrate[n] = np.mean( hitrates[i,:one_min_index] )
+            
+            
+        # --- report to the user ---
+        
+        # update plots
+        self._set_plot_data(hitrates)
+        
+        
+        # print to console
+        # todo: consider printing set threshold parameters
         text = ['Monitor Statistics',
-                '------------------',
+                '---------------------------------',
                 'Active processes      : %d'      % num_procs,
                 'Active hosts          : %d'      % num_active_hosts,
                 'Per-process data rate : %.2f Hz' % per_proc_rate,
                 'Total data rate       : %.2f Hz' % per_proc_rate * num_procs,
                 'Events processed      : %d'      % evts_processed,
-                '1min xtal hitrate     : %.2f'    % np.mean(mon_data['xtal_hitrate'][:60])
-                '1min diffuse hitrate  : %.2f'    % np.mean(mon_data['diffuse_hitrate'][:60])
+                'Active cameras        : %d'      % num_cameras,
+                'Shutter threshold     : %d ADU'  % shutter_tshd,
+                '---------------------------------',
+                '1min CSPAD damage lvl : %.2f'    % one_min_hitrate['damage'],
+                '1min xtal hitrate     : %.2f'    % one_min_hitrate['xtal'],
+                '1min diffuse hitrate  : %.2f'    % one_min_hitrate['diffuse'],
+                '---------------------------------'
                 ]
         
         self.set_status_text('\n'.join(text))
@@ -297,11 +392,15 @@ class TrapdoorWidget(QtGui.QWidget):
     
 def main():
     
-    app = QtGui.QApplication([])
+    app = QtGui.QApplication(sys.argv)
+    
     test_gui = TrapdoorWidget()
+    test_gui._set_plot_data( np.ones((120,3,2)) )
+    test_gui.show()
+    
     print test_gui.hosts
     
-    app.exec_()
+    sys.exit(app.exec_())
     
     return
     

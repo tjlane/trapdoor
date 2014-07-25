@@ -171,7 +171,8 @@ class CxiGuardian(MapReducer):
         super(CxiGuardian, self).__init__(self.map,
                                           self.reduce,
                                           self.action,
-                                          source='cxishmem')
+                                          source='cxishmem',
+                                          config_file=None) # todos
         self._use_array_comm = True
         
         # set key parameters
@@ -193,7 +194,7 @@ class CxiGuardian(MapReducer):
     def add_monitor(self, name, adu_threshold, area_threshold, 
                     is_damage_control=False):
                     
-        # may want to check threshold sanity
+        # todo : may want to check threshold sanity
         
         self._monitor_names.append(name)
         self._adu_thresholds.append(adu_threshold)
@@ -219,7 +220,7 @@ class CxiGuardian(MapReducer):
     
     def set_monitor_thresholds(self, name, adu_threshold, area_threshold):
         
-        # may want to check threshold sanity
+        # todo : may want to check threshold sanity
         
         if name not in self.monitor_names:
             raise KeyError('Monitor: %s not registered yet, cannot update '
@@ -291,10 +292,10 @@ class CxiGuardian(MapReducer):
         self._zmq_context = zmq.Context()
 
         self._zmq_pull = self._zmq_context.socket(zmq.PULL)
-        self._zmq_pull.bind('tcp://localhost:%s' % pull_port)
+        self._zmq_pull.bind('tcp://*:%s' % pull_port)
 
         self._zmq_publisher = self._zmq_context.socket(zmq.PUB)
-        self._zmq_publisher.bind('tcp://*:%s' % port)
+        self._zmq_publisher.bind('tcp://*:%s' % pub_port)
 
         self._zmq_ready = 1
 
@@ -358,17 +359,17 @@ class CxiGuardian(MapReducer):
         
         # ---- check for remote messages and take action
         try:
-            msg = self._zmq_pull(zmq.NOBLOCK)
+            instructions, content = self._zmq_pull(zmq.NOBLOCK)
         except zmq.Again as e:
             pass # this means no new message
             
         # parse the message...
-        if msg == 'shutdown':
-            self._shutdown(msg='remote monitor process requested shutdown')
+        if instructions == 'shutdown':
+            self._shutdown(msg='remote process requested shutdown')
             
-        # change-of-state messages are expected to be of the form "key : value"
-        # elif msg.find('set_consecutive_threshold') == 0:
-        #     self. = int(msg.split(':')[1])
+        elif instructions == 'set_parameters':
+            # todo
+            raise NotImplementedError('asking for param update')
             
         else:
             raise RuntimeError('Remote message not understood: %s' % msg)
@@ -376,7 +377,7 @@ class CxiGuardian(MapReducer):
         return
         
         
-    def _shutdown(self, msg=''):
+    def _shutdown(self, msg='cause unspecified'):
         """
         Throw an exception capable of taking down the entire MPI process.
         """
@@ -392,6 +393,9 @@ class CxiGuardian(MapReducer):
         """
         Similar to np.digitize, but faster, I hope. Bins must be monotonic.
         """
+
+        # todo
+        raise NotImplementedError('not debugged')
 
         if type(bins) == int:
             bins = [bins]

@@ -1,0 +1,10 @@
+TODO
+----
+
+-- test Guardian as a stand-alone
+-- write Guardian doc strings
+-- wire up ZMQ on GUI side
+-- check we can connect many shutter controls to the same endpoint
+----> if not, we need to relay shutter controls through the master proc
+-- fix run, run_mpi functions
+-- think about automatic process discovery
