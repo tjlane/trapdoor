@@ -64,6 +64,29 @@ class TrapdoorWidget(QtGui.QWidget):
         od = self._params.getValues()
         d = {k : od[k][0] for k in od}
         return d
+        
+        
+    @property
+    def monitor_list(self):
+        """
+        Returns
+        -------
+        monitor_list : list
+            A list of tuples, where each entry corresponds to a threshold 
+            monitor in the format (name, adu_threshold, area_threshold)
+        """
+        
+        monitor_list = []
+        
+        p = self.parameters
+        for k in p:
+            name = k
+            adu  = k['%s :: Saturation Threshold']
+            area = k['%s :: Area Threshold']
+        
+            monitor_list.append( (name, adu, area) )
+        
+        return monitor_list
     
         
     def _init_zmq(self, sub_port=4747, push_port=4748):
@@ -264,24 +287,14 @@ class TrapdoorWidget(QtGui.QWidget):
     
 
     def launch_monitor(self):
-        
+        """
+        Spawn MPI process that will broadcast messages using ZMQ
+        """
         self.set_status_text('Launching monitor process...')
-        
-        # retrieve the current values for each threshold from the text boxes
-        p_dict = self.parameters
-        
-        # this is going to spawn an MPI process that will broadcast messages
-        # using ZMQ
-        
-        # guardain.run_mpi(p_dict['Saturation Threshold'],
-        #                  p_dict['Consecutive Shots'],
-        #                  area_threshold,
-        #                  self.hosts)
-        
+        guardain.run_mpi(monitor_list, self.hosts)
         self.set_status_text('Monitor launched, waiting for reply.')
-        
         return
-
+    
 
     def shutdown_monitor(self):
         self._send_zmq_message('shutdown', None)
@@ -299,7 +312,7 @@ class TrapdoorWidget(QtGui.QWidget):
             self._changes_ready_to_transmit = 0
 
         return
-        
+    
         
     def update(self):
         """

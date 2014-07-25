@@ -155,7 +155,6 @@ class CxiGuardian(MapReducer):
         ----------
         """
         
-        
         # a "monitor" is defined by 3 parameters stored in order in the 
         # following lists
         self._monitor_names   = []
@@ -550,73 +549,29 @@ class CxiGuardian(MapReducer):
         return
         
         
-
-def run(adu_threshold, consecutive_threshold, area_threshold):
-    """
-    Run the CSPAD guardian. This starts up an infinite loop that looks for
-    CSPAD damage and shutters the beam if it is found.
-        
-    Parameters
-    ----------
-    adu_threshold : int
-        The ADU value that, if exceeded, identifies a pixel as damaged.
-    
-    consecutive_threshold : int
-        The number of consecutive damaged events that must occur before the
-        trigger to close the shutter is thrown
-        
-    area_threshold : int
-        The number of pixels on the CSPAD that must be damaged before tbe
-        trigger to close the shutter is thrown
-    """
-    
-    camera_buffer = np.zeros((2, 32, 185, 388), dtype=np.int32)
-    cntrl = ShutterControl(consecutive_threshold, area_threshold,
-                           debug_mode=False)
-       
-    monitor = MapReducer(binarize, accumulate_damage, cntrl,
-                         result_buffer=camera_buffer)
-    monitor.start()
-    
+def run(monitors):
+    g = CxiGuardian(monitors)
+    g.start()
     return
 
 
-def run_mpi(adu_threshold, consecutive_threshold, area_threshold,
-            hosts):
+def run_mpi(monitors, hosts):
     """
-    Run the CSPAD guardian. This starts up an infinite loop that looks for
-    CSPAD damage and shutters the beam if it is found.
-        
-    Parameters
-    ----------
-    adu_threshold : int
-        The ADU value that, if exceeded, identifies a pixel as damaged.
-    
-    consecutive_threshold : int
-        The number of consecutive damaged events that must occur before the
-        trigger to close the shutter is thrown
-        
-    area_threshold : int
-        The number of pixels on the CSPAD that must be damaged before tbe
-        trigger to close the shutter is thrown
     """
     
     # determine the total number of pixels implied by args.perc
 
-
-    num_procs = args.nodes * 8
+    num_nodes = len(hosts)
+    num_procs = num_nodes * 8
 
     # give the user some output!
     print ''
     print '>>             TRAPDOOR'
     print '           ... starting'
     print '-----------------------'
-    print 'nodes:         %d' % args.nodes
+    print 'nodes:         %d' % num_nodes
     print 'processors:    %d' % num_procs
-    print 'host:          %s' % args.host
-    print 'ADU tshd:      %d' % args.adu
-    print 'Pixel # tshd:  %d' % area_threshold
-    print 'Consec tshd:   %d' % args.consecutive
+    print 'hosts:         %s' % str(hosts)
     print '-----------------------' 
 
 
@@ -640,7 +595,7 @@ def run_mpi(adu_threshold, consecutive_threshold, area_threshold,
     # USER:       %s
     # DATE:       %s
 
-    pyscript="import sys; sys.path.append('/reg/neh/home2/tjlane/opt/trapdoor'); from trapdoor import guardian; guardian.run(%d, %d, %d)"
+    pyscript="from trapdoor import guardian; guardian.run(%s)"
 
     source /reg/g/psdm/etc/ana_env.sh
     . /reg/g/psdm/bin/sit_setup.sh
@@ -649,9 +604,7 @@ def run_mpi(adu_threshold, consecutive_threshold, area_threshold,
 
     """ % (os.environ['USER'],
            datetime.datetime.now(),
-           args.adu,
-           args.consecutive,
-           area_threshold)
+           str(monitors))
 
     f = open(mpi_script_path, 'w')
     f.write(mpi_script_text)
@@ -697,7 +650,7 @@ def run_mpi(adu_threshold, consecutive_threshold, area_threshold,
     return
 
 
-def test_guardian1():
+def test1():
 
     g = CxiGuardian()
     g.add_monitor('test_monitor', 5, 5)
@@ -705,20 +658,14 @@ def test_guardian1():
     g.start()
 
     return
+    
 
-
-def test_guardian2():
-
-    g = CxiGuardian()
-    g.add_monitor('test_monitor', 5, 5, is_damage_control=True)
-    g._source = 'exp=cxia4113:run=30' # overwrite from shmem for testing
-    g.start()
-
+def test2():
+    run('test_monitor', 5, 5)
     return
 
         
 if __name__ == '__main__':
-    test_guardian1()
-    #test_guardian2()
+    test2()
     
 
