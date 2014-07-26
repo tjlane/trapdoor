@@ -219,20 +219,18 @@ class MapReducer(OnlinePsana):
             self._use_array_comm = False
             
         self.num_reduced_events = 0
-        self._analysis_frequency = 120
+        self._analysis_frequency = 20
 
         return
+
+    @property
+    def MPI_RANK(self):
+        return MPI_RANK
     
         
-    def start(self, tachometer=True, verbose=True):
+    def start(self, verbose=True):
         """
         Begin the map-reduce procedure.
-        
-        Optional Parameters
-        -------------------
-        tachometer : bool
-            If `True`, print information about the speed at which data
-            are being processed.
         """
         
         self._running = True
@@ -277,13 +275,12 @@ class MapReducer(OnlinePsana):
                 event_index += 1
 
                 # send the rate of processing to the master process
-                if tachometer:
-                    if event_index % self._analysis_frequency == 0:
-                        rate = float(self._analysis_frequency) / (time.time() - start_time)
-                        start_time = time.time()
-                        COMM.isend(rate, dest=0, tag=1)
-                        if verbose:
-                            print 'RANK %d reporting rate: %.2f' % (MPI_RANK, rate)
+                if event_index % self._analysis_frequency == 0:
+                    rate = float(self._analysis_frequency) / (time.time() - start_time)
+                    start_time = time.time()
+                    COMM.isend(rate, dest=0, tag=1)
+                    if verbose:
+                        print 'RANK %d reporting rate: %.2f' % (MPI_RANK, rate)
 
                 if verbose:
                     if event_index % 100 == 0:
@@ -307,14 +304,13 @@ class MapReducer(OnlinePsana):
                     self.num_reduced_events += 1
                     self.action(self._result)
 
-                    #self.check_for_stopsig()
-                
                     # this will get all the rate data from the workers and print it
-                    if tachometer:
-                        if self.num_reduced_events % self._analysis_frequency == 0:
-                            self.tachometer(verbose=True)
-                            if hasattr(self.action, 'publish_stats'):
-                                self.action.publish_stats(master_stats=self.stats)
+                    #if self.num_reduced_events % self._analysis_frequency == 0:
+                    #    self.tachometer()
+
+                    if verbose:
+                        if self.num_reduced_events % 100 == 0:
+                            print '%d evts reduced' % self.num_reduced_events 
  
 
             except KeyboardInterrupt as e:
@@ -346,14 +342,14 @@ class MapReducer(OnlinePsana):
         """
         Publish statistics to a monitoring process.
         """
-        
-        # WORK
-        raise NotImplementedError()
 
-        stats = {'num_procs'      : MPI_SIZE,
+        self.tachometer(verbose=False)
+        
+        stats = {
+                 'num_procs'      : MPI_SIZE,
                  'per_proc_rate'  : self.mean_rate,
                  'evts_processed' : self.num_reduced_events,
-                 'hosts'          : ['']
+                 'hosts'          : ['unknown_not_implemented']
                 }
 
         return stats
@@ -377,7 +373,9 @@ class MapReducer(OnlinePsana):
 
         # the first is better (no replacement), but not avail in numpy 1.6.X
         #sample = np.random.choice(np.arange(1, MPI_SIZE), min(MPI_SIZE, 8))
-        sample = np.unique( np.random.randint(1, MPI_SIZE, min(MPI_SIZE, 8)) )
+        #sample = np.unique( np.random.randint(1, MPI_SIZE, min(MPI_SIZE, 8)) )
+
+        sample = [1, 2]
 
         rates = [ COMM.recv(source=i, tag=1) for i in sample ]
         self.mean_rate  = np.mean(rates)

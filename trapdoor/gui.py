@@ -6,7 +6,7 @@ Contains the implementation of the GUI used to monitor and control trapdoor
 import sys
 import zmq
 import numpy as np
-import cPickle as pickle
+import socket
 
 from pyqtgraph.Qt import QtGui, QtCore
 import pyqtgraph as pg
@@ -24,12 +24,11 @@ class TrapdoorWidget(QtGui.QWidget):
     
     colors = ['r', 'g', 'y']
     
-    def __init__(self, communication_freq=1000):
+    def __init__(self, communication_freq=50):
         
         super(TrapdoorWidget, self).__init__()
         
         self.setWindowTitle('Trapdoor: CSPAD Monitoring')
-        self._init_zmq()
         self._draw_canvas()
 
         self.timer = QtCore.QTimer()
@@ -37,6 +36,7 @@ class TrapdoorWidget(QtGui.QWidget):
         self.timer.start(communication_freq)
 
         self._monitor_status = 'ready'
+        self._init_zmq()
         
         return
         
@@ -101,12 +101,17 @@ class TrapdoorWidget(QtGui.QWidget):
     def _init_zmq(self, sub_port=4747, push_port=4748):
         
         self._zmq_context = zmq.Context()
+        master_host = socket.gethostbyname_ex(self.hosts[0])[-1][0] # gives ip
+        topic = 'stats'
         
+        print 'GUI: binding %s:%d for ZMQ SUB' % (master_host, sub_port)
         self._zmq_sub = self._zmq_context.socket(zmq.SUB)
-        self._zmq_sub.connect("tcp://127.0.0.1:%s" % sub_port)
-        
+        self._zmq_sub.connect('tcp://%s:%d' % (master_host, sub_port))
+        self._zmq_sub.setsockopt(zmq.SUBSCRIBE, topic)
+       
+        print 'GUI: binding %s:%d for ZMQ PUSH' % (master_host, push_port) 
         self._zmq_push = self._zmq_context.socket(zmq.PUSH)
-        self._zmq_push.bind('tcp://*:%s' % push_port)
+        self._zmq_push.bind('tcp://%s:%d' % (master_host, push_port))
         
         return
     
@@ -117,7 +122,8 @@ class TrapdoorWidget(QtGui.QWidget):
         is that `identifier` tells the remote process what to do with the data
         in `msg`.
         """
-        self._zmq_push.send(pickle.dumps( (identifier, msg) ))
+        print 'GUI: sending message, %s %s' % (identifier, msg)
+        self._zmq_push.send_pyobj((identifier, msg))
         return
     
         
@@ -183,7 +189,7 @@ class TrapdoorWidget(QtGui.QWidget):
                   {'name': 'xtal :: Saturation Threshold', 'type': 'int', 'value': 5000, 'suffix': 'ADU'},
                   {'name': 'xtal :: Area Threshold', 'type': 'int', 'value': 1, 'suffix': '%', 'limits': (0, 100)},
                   
-                  {'name': 'diffuse :: Saturation Threshold', 'type': 'int', 'value': 1000, 'suffix': 'ADU'},
+                  {'name': 'diffuse :: Saturation Threshold', 'type': 'int', 'value': 50000, 'suffix': 'ADU'},
                   {'name': 'diffuse :: Area Threshold', 'type': 'int', 'value': 20, 'suffix': '%', 'limits': (0, 100)}
                  ]
 
@@ -200,12 +206,12 @@ class TrapdoorWidget(QtGui.QWidget):
         
     def _draw_host_text(self, layout):
         
-        text = ['daq-cxi-dss07',
-                'daq-cxi-dss08',
-                'daq-cxi-dss09',
-                'daq-cxi-dss10',
-                'daq-cxi-dss11',
-                'daq-cxi-dss12']
+        text = ['daq-cxi-dss07'] #,
+                #'daq-cxi-dss08',
+                #'daq-cxi-dss09',
+                #'daq-cxi-dss10',
+                #'daq-cxi-dss11',
+                #'daq-cxi-dss12']
         
         self._host_text_widget = QtGui.QTextEdit(', \n'.join(text))
         
@@ -288,6 +294,7 @@ class TrapdoorWidget(QtGui.QWidget):
     def _set_plot_data(self, hitrates):
         
         for i,n in enumerate(self.threshold_names):
+            print 'setting data for %d:%s | %f' % (i,n, hitrates[:,i,0].mean())
             self._lower_curves[i].setData( hitrates[:,i,0] )
             self._upper_curves[i].setData( hitrates[:,i,1] )
             
@@ -306,8 +313,8 @@ class TrapdoorWidget(QtGui.QWidget):
         self.set_status_text('Launching monitor process...')
         print 'GUI: Launching monitor process...'
         guardian.run_mpi(self.monitor_list, self.hosts)
-        self.set_status_text('Monitor launched, waiting for reply.')
-        print 'GUI: Monitor launched, waiting for reply.'
+        self.set_status_text('Monitor launched, waiting for reply (takes ~30 sec).')
+        print 'GUI: Monitor launched'
         return
     
 
@@ -337,9 +344,11 @@ class TrapdoorWidget(QtGui.QWidget):
         
         # get data from the monitor process
         try:
-            mon_data = self._zmq_sub.recv(zmq.NOBLOCK)
+            topic    = self._zmq_sub.recv(zmq.NOBLOCK)
+            mon_data = self._zmq_sub.recv_pyobj(zmq.NOBLOCK)
+            print 'GUI: recieved stats msg'
         except zmq.Again as e:
-            print 'GUI: No remote detected...'
+            #print 'GUI: No remote detected...'
             return
 
         # if we got data, but are in the 'ready' state, toggle to 'running' state
@@ -412,7 +421,7 @@ class TrapdoorWidget(QtGui.QWidget):
                 'Active processes      : %d'      % num_procs,
                 'Active hosts          : %d'      % num_active_hosts,
                 'Per-process data rate : %.2f Hz' % per_proc_rate,
-                'Total data rate       : %.2f Hz' % per_proc_rate * num_procs,
+                'Total data rate       : %.2f Hz' % (per_proc_rate * num_procs,),
                 'Events processed      : %d'      % evts_processed,
                 'Active cameras        : %d'      % num_cameras,
                 'Shutter threshold     : %d ADU'  % shutter_tshd,
@@ -433,7 +442,7 @@ def main():
     app = QtGui.QApplication(sys.argv)
     
     test_gui = TrapdoorWidget()
-    test_gui._set_plot_data( np.ones((120,3,2)) )
+    test_gui._set_plot_data( np.zeros((120,3,2)) )
     test_gui.show()
     
     print test_gui.hosts

@@ -10,7 +10,6 @@ import time
 import zmq
 import datetime
 import subprocess
-import cPickle as pickle
 
 import psana
 import epics
@@ -40,11 +39,8 @@ class ShutterControl(object):
         """
 
         self.threshold = threshold
-
         self._control = epics.PV('CXI:R52:EVR:01:TRIG2:TPOL')
-
         self.debug_mode = debug_mode
-        self._zmq_ready = 0
 
         return
     
@@ -173,18 +169,16 @@ class CxiGuardian(MapReducer):
         for m in monitors:
             self.add_monitor(*m)
 
-        # init the MapReduce class
-        super(CxiGuardian, self).__init__(self.map,
-                                          self.reduce,
-                                          self.action,
-                                          source='cxishmem',
-                                          config_file=None) # todos
+        self._zmq_ready = 0
+
+        # manually init the MapReduce class
+        self._source  = 'cxishmem'
+        #self.register_cfg_file('/reg/neh/home2/tjlane/opt/trapdoor/trapdoor/default.cfg') # todo
         self._use_array_comm = True
-        
-        # set key parameters
-        #self._history_size = history_size
-        #self._window_size = window_size
-        
+
+        self.num_reduced_events = 0
+        self._analysis_frequency = 120
+
         return
     
         
@@ -200,7 +194,8 @@ class CxiGuardian(MapReducer):
     def add_monitor(self, name, adu_threshold, area_threshold, 
                     is_damage_control=False):
 
-        print 'Adding monitor: %s (%d | %d)' % (name, adu_threshold, area_threshold)
+        print 'Rank %d : Adding monitor: %s (%d | %d)' % (self.MPI_RANK, name,
+                                                          adu_threshold, area_threshold)
                     
         # todo : may want to check threshold sanity
         
@@ -222,7 +217,7 @@ class CxiGuardian(MapReducer):
         self._buffer = np.zeros(( self.num_monitors,
                                   self.num_cameras ),
                                 dtype=np.int)
-            
+
         return
     
     
@@ -300,10 +295,10 @@ class CxiGuardian(MapReducer):
         self._zmq_context = zmq.Context()
 
         self._zmq_pull = self._zmq_context.socket(zmq.PULL)
-        self._zmq_pull.bind('tcp://*:%s' % pull_port)
+        self._zmq_pull.connect('tcp://127.0.0.1:%s' % pull_port)
 
-        self._zmq_publisher = self._zmq_context.socket(zmq.PUB)
-        self._zmq_publisher.bind('tcp://*:%s' % pub_port)
+        self._zmq_publish = self._zmq_context.socket(zmq.PUB)
+        self._zmq_publish.bind('tcp://*:%s' % pub_port)
 
         self._zmq_ready = 1
 
@@ -329,7 +324,7 @@ class CxiGuardian(MapReducer):
                       'window_size']
                       
         for p in properties:
-            stats[p] = self.__dict__[p]
+            stats[p] = getattr(self, p)
             
         # also throw in specifics
         stats['hitrates'] = self._result
@@ -362,15 +357,17 @@ class CxiGuardian(MapReducer):
 
 
         # ---- publish data widely (to monitors)
-        self._zmq_socket.send(self.stats)
-        print 'MASTER: sending resutls to GUI'
+        print 'MASTER: sending results to GUI'
+        self._zmq_publish.send('stats', zmq.SNDMORE)
+        self._zmq_publish.send_pyobj(self.stats)
         
         
         # ---- check for remote messages and take action
         try:
-            instructions, content = pickle.loads( self._zmq_pull.recv(zmq.NOBLOCK) )
+            instructions, content = self._zmq_pull.recv_pyobj(zmq.NOBLOCK)
+            print 'MASTER: recv msg: %s - %s' % (instructions, content)
         except zmq.Again as e:
-            pass # this means no new message
+            return # this means no new message
             
         # parse the message...
         if instructions == 'shutdown':
@@ -461,7 +458,7 @@ class CxiGuardian(MapReducer):
             for the DS1 camera, the second is for DS2.
         """
         
-        pixel_counts = np.zeros((self.num_monitors, 2), dtype=np.int)
+        pixel_counts = np.zeros((self.num_monitors, self.num_cameras), dtype=np.int)
         
         # we need the thresholds in monotonic order for self.digitize
         # todo
@@ -470,7 +467,7 @@ class CxiGuardian(MapReducer):
         #b = self.adu_thresholds[threshold_order]
         
         b = self.adu_thresholds
-        if type(b) == int: b = [b,]
+        if type(b) == int: b = [b,] # needs to be iterable
         
         ds1 = psana_event.get(psana.CsPad.DataV2, self._ds1_src)
         ds2 = psana_event.get(psana.CsPad.DataV2, self._ds2_src)
@@ -491,8 +488,9 @@ class CxiGuardian(MapReducer):
         #reverse_map = np.argsort(threshold_order)
         #pixel_counts = pixel_counts[reverse_map,:]
 
-        assert pixel_counts.shape == (self.num_monitors, 2)
-        
+        assert pixel_counts.shape == self._buffer.shape, 'buffer shape incorrect for map result'
+        assert pixel_counts.dtype == self._buffer.dtype, 'buffer type incorrect for map result' 
+
         # check for damage
         if hasattr(self, '_damage_control_index'):
             self.check_for_damage(pixel_counts)
@@ -509,7 +507,7 @@ class CxiGuardian(MapReducer):
         Rolls the hitrate buffer
         Stores the hitrate
         """
-        
+
         assert hitrate_buffer.shape[1:] == pixel_counts.shape, '%s %s' \
                   % (str(hitrate_buffer.shape), str(pixel_counts.shape))
         
@@ -521,7 +519,7 @@ class CxiGuardian(MapReducer):
         # the "area" threshold) and store that value in a running buffer
         for i in range(self.num_monitors):
             hitrate_buffer[0,i,:] = pixel_counts[i,:] > self._area_thresholds[i]
-        
+
         return hitrate_buffer
     
         
@@ -548,8 +546,6 @@ class CxiGuardian(MapReducer):
         Communicate with the world
         """
 
-        print 'hello from action!'
-        
         # compute the hitrate for the last few shots
         hitrate = np.mean(hitrate_buffer, axis=0)
         

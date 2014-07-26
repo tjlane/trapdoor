@@ -24,7 +24,7 @@ def map_func(psana_event):
     return image
 
 def action_func(image):
-    #print np.mean(image)
+    print np.mean(image)
     return
 
 buf = np.ones((32, 185, 388))
