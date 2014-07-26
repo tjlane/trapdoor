@@ -6,12 +6,14 @@ Contains the implementation of the GUI used to monitor and control trapdoor
 import sys
 import zmq
 import numpy as np
+import cPickle as pickle
 
 from pyqtgraph.Qt import QtGui, QtCore
 import pyqtgraph as pg
 from pyqtgraph.parametertree import Parameter, ParameterTree
 
 #from trapdoor import guardian
+import guardian
 
 
 class TrapdoorWidget(QtGui.QWidget):
@@ -22,13 +24,19 @@ class TrapdoorWidget(QtGui.QWidget):
     
     colors = ['r', 'g', 'y']
     
-    def __init__(self):
+    def __init__(self, communication_freq=1000):
         
         super(TrapdoorWidget, self).__init__()
         
         self.setWindowTitle('Trapdoor: CSPAD Monitoring')
         self._init_zmq()
         self._draw_canvas()
+
+        self.timer = QtCore.QTimer()
+        self.timer.timeout.connect(self.recv_data)
+        self.timer.start(communication_freq)
+
+        self._monitor_status = 'ready'
         
         return
         
@@ -41,9 +49,11 @@ class TrapdoorWidget(QtGui.QWidget):
         
     @property
     def monitor_status(self):
-        # todo
-        # should return one of: 'ready', 'running', 'unknown', ...
-        return 'ready'
+        if self._monitor_status in ['ready', 'running']:
+            ms = self._monitor_status
+        else:
+            ms = 'unknown'
+        return ms
         
         
     @property
@@ -79,10 +89,9 @@ class TrapdoorWidget(QtGui.QWidget):
         monitor_list = []
         
         p = self.parameters
-        for k in p:
-            name = k
-            adu  = k['%s :: Saturation Threshold']
-            area = k['%s :: Area Threshold']
+        for name in self.threshold_names:
+            adu  = p['%s :: Saturation Threshold' % name]
+            area = p['%s :: Area Threshold' % name]
         
             monitor_list.append( (name, adu, area) )
         
@@ -96,8 +105,8 @@ class TrapdoorWidget(QtGui.QWidget):
         self._zmq_sub = self._zmq_context.socket(zmq.SUB)
         self._zmq_sub.connect("tcp://127.0.0.1:%s" % sub_port)
         
-        self._zmq_pusher = self._zmq_context.socket(zmq.PUSH)
-        self._zmq_pusher.bind('tcp://*:%s' % push_port)
+        self._zmq_push = self._zmq_context.socket(zmq.PUSH)
+        self._zmq_push.bind('tcp://*:%s' % push_port)
         
         return
     
@@ -108,7 +117,7 @@ class TrapdoorWidget(QtGui.QWidget):
         is that `identifier` tells the remote process what to do with the data
         in `msg`.
         """
-        self._zmq_push((identifier, msg))
+        self._zmq_push.send(pickle.dumps( (identifier, msg) ))
         return
     
         
@@ -255,11 +264,15 @@ class TrapdoorWidget(QtGui.QWidget):
         
         if self.monitor_status == 'running':
             self.shutdown_monitor()
-            self._launch_btn.setStyleSheet("background-color: red")
+            self._launch_btn.setStyleSheet("background-color: green")
+            self._launch_btn.setText('Launch')
+            self._monitor_status = 'ready'
             
         elif self.monitor_status == 'ready':
             self.launch_monitor()
             self._launch_btn.setStyleSheet("background-color: red")
+            self._launch_btn.setText('Shutdown')
+            self._monitor_status = 'running'
             
         else:
             raise RuntimeError('Status of remote monitor process is `%s`. '
@@ -291,8 +304,10 @@ class TrapdoorWidget(QtGui.QWidget):
         Spawn MPI process that will broadcast messages using ZMQ
         """
         self.set_status_text('Launching monitor process...')
-        guardain.run_mpi(monitor_list, self.hosts)
+        print 'GUI: Launching monitor process...'
+        guardian.run_mpi(self.monitor_list, self.hosts)
         self.set_status_text('Monitor launched, waiting for reply.')
+        print 'GUI: Monitor launched, waiting for reply.'
         return
     
 
@@ -314,14 +329,24 @@ class TrapdoorWidget(QtGui.QWidget):
         return
     
         
-    def update(self):
+    def recv_data(self):
         """
         Update all data fields with accumulated statistics from the monitor
         process. 
         """
         
         # get data from the monitor process
-        mon_data = self._socket.recv()
+        try:
+            mon_data = self._zmq_sub.recv(zmq.NOBLOCK)
+        except zmq.Again as e:
+            print 'GUI: No remote detected...'
+            return
+
+        # if we got data, but are in the 'ready' state, toggle to 'running' state
+        if (mon_data != None) and (self.monitor_status == 'ready'):
+            self._launch_btn.setStyleSheet("background-color: red")
+            self._launch_btn.setText('Shutdown')
+            self._monitor_status == 'running'
         
         # --> ensure names of threshold monitors match
         num_monitors = mon_data.get('num_monitors', -1)
@@ -412,6 +437,7 @@ def main():
     test_gui.show()
     
     print test_gui.hosts
+    print test_gui.monitor_list
     
     sys.exit(app.exec_())
     

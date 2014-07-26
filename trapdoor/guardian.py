@@ -8,6 +8,9 @@ that actually processes data in real time and operates the shutter.
 import os
 import time
 import zmq
+import datetime
+import subprocess
+import cPickle as pickle
 
 import psana
 import epics
@@ -154,7 +157,7 @@ class CxiGuardian(MapReducer):
         Parameters
         ----------
         """
-        
+
         # a "monitor" is defined by 3 parameters stored in order in the 
         # following lists
         self._monitor_names   = []
@@ -162,10 +165,14 @@ class CxiGuardian(MapReducer):
         self._area_thresholds = []
         
         self.shutter_control = lambda x : None # placeholder
-        
+
+        # set key parameters
+        self._history_size = history_size
+        self._window_size = window_size
+
         for m in monitors:
             self.add_monitor(*m)
-        
+
         # init the MapReduce class
         super(CxiGuardian, self).__init__(self.map,
                                           self.reduce,
@@ -175,8 +182,8 @@ class CxiGuardian(MapReducer):
         self._use_array_comm = True
         
         # set key parameters
-        self._history_size = history_size
-        self._window_size = window_size
+        #self._history_size = history_size
+        #self._window_size = window_size
         
         return
     
@@ -192,6 +199,8 @@ class CxiGuardian(MapReducer):
 
     def add_monitor(self, name, adu_threshold, area_threshold, 
                     is_damage_control=False):
+
+        print 'Adding monitor: %s (%d | %d)' % (name, adu_threshold, area_threshold)
                     
         # todo : may want to check threshold sanity
         
@@ -354,11 +363,12 @@ class CxiGuardian(MapReducer):
 
         # ---- publish data widely (to monitors)
         self._zmq_socket.send(self.stats)
+        print 'MASTER: sending resutls to GUI'
         
         
         # ---- check for remote messages and take action
         try:
-            instructions, content = self._zmq_pull(zmq.NOBLOCK)
+            instructions, content = pickle.loads( self._zmq_pull.recv(zmq.NOBLOCK) )
         except zmq.Again as e:
             pass # this means no new message
             
@@ -454,8 +464,12 @@ class CxiGuardian(MapReducer):
         pixel_counts = np.zeros((self.num_monitors, 2), dtype=np.int)
         
         # we need the thresholds in monotonic order for self.digitize
-        threshold_order = np.argsort(self.adu_thresholds)
-        b = self.adu_thresholds[threshold_order]
+        # todo
+        #threshold_order = np.argsort(self.adu_thresholds)
+        #print self.adu_thresholds, threshold_order
+        #b = self.adu_thresholds[threshold_order]
+        
+        b = self.adu_thresholds
         if type(b) == int: b = [b,]
         
         ds1 = psana_event.get(psana.CsPad.DataV2, self._ds1_src)
@@ -473,9 +487,9 @@ class CxiGuardian(MapReducer):
             ds2_image = np.vstack([ ds2.quads(i).data() for i in range(4) ])
             pixel_counts[:,1] = self.count_pixels_over_threshold(ds2_image, b)
 
-        # put things back in their original order
-        reverse_map = np.argsort(threshold_order)
-        pixel_counts = pixel_counts[reverse_map,:]
+        # put things back in their original order :: todo
+        #reverse_map = np.argsort(threshold_order)
+        #pixel_counts = pixel_counts[reverse_map,:]
 
         assert pixel_counts.shape == (self.num_monitors, 2)
         
@@ -533,6 +547,8 @@ class CxiGuardian(MapReducer):
         Roll over the history buffer
         Communicate with the world
         """
+
+        print 'hello from action!'
         
         # compute the hitrate for the last few shots
         hitrate = np.mean(hitrate_buffer, axis=0)
@@ -563,6 +579,9 @@ def run_mpi(monitors, hosts):
 
     num_nodes = len(hosts)
     num_procs = num_nodes * 8
+    host = hosts[0] # where the master resides
+    hosts = [ h.strip() for h in hosts ]
+
 
     # give the user some output!
     print ''
@@ -619,10 +638,9 @@ def run_mpi(monitors, hosts):
     # (3) shell out the MPI command
 
     try:
-        r = subprocess.check_call(['ssh', args.host, 'hostname'])
+        r = subprocess.check_call(['ssh', host, 'hostname'])
     except subprocess.CalledProcessError:
-        print 'RETURN CODE: %d' % r
-        raise IOError('No route to host: %s' % args.host)
+        raise IOError('No route to host: %s' % host)
 
     # try and find MPI
     lcls_mpi = '/reg/common/package/openmpi/openmpi-1.8/install/bin/mpirun'
@@ -636,7 +654,7 @@ def run_mpi(monitors, hosts):
     cmd = [mpi_bin,
            '-n', str(num_procs),
            '--host', ','.join(hosts),
-            mpi_script_path]
+           mpi_script_path]
 
     print '-----------------------'
     print '>> starting MPI'
@@ -644,7 +662,7 @@ def run_mpi(monitors, hosts):
 
     # for some reason, NOT passing the kwargs stdout/stderr allows the stdout
     # to reach the running terminal
-    r = subprocess.check_call(cmd, shell=False)
+    pipe = subprocess.Popen(cmd, shell=False)
     print '-----------------------'
     
     return
@@ -661,7 +679,7 @@ def test1():
     
 
 def test2():
-    run('test_monitor', 5, 5)
+    run_mpi([('test_monitor', 5, 5)], ['daq-cxi-dss07'])
     return
 
         
