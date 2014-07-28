@@ -10,10 +10,14 @@ import time
 import zmq
 import datetime
 import subprocess
+import numpy as np
 
 import psana
-import epics
-import numpy as np
+try:
+    import epics
+except ImportError as e:
+    print 'Could not import EPICS'
+    
 
 from core import MapReducer, ShutdownInterrupt
 
