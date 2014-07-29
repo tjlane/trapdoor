@@ -183,13 +183,13 @@ class TrapdoorWidget(QtGui.QWidget):
         """
         
         params = [
-                  {'name': 'damage :: Saturation Threshold', 'type': 'int', 'value': 10000, 'suffix': 'ADU'},
-                  {'name': 'damage :: Area Threshold', 'type': 'int', 'value': 5, 'suffix': '%', 'limits': (0, 100)},
+                  {'name': 'damage :: Saturation Threshold', 'type': 'int', 'value': 50000, 'suffix': 'ADU'},
+                  {'name': 'damage :: Area Threshold', 'type': 'int', 'value': 20, 'suffix': '%', 'limits': (0, 100)},
                   
                   {'name': 'xtal :: Saturation Threshold', 'type': 'int', 'value': 5000, 'suffix': 'ADU'},
                   {'name': 'xtal :: Area Threshold', 'type': 'int', 'value': 1, 'suffix': '%', 'limits': (0, 100)},
                   
-                  {'name': 'diffuse :: Saturation Threshold', 'type': 'int', 'value': 50000, 'suffix': 'ADU'},
+                  {'name': 'diffuse :: Saturation Threshold', 'type': 'int', 'value': 1000, 'suffix': 'ADU'},
                   {'name': 'diffuse :: Area Threshold', 'type': 'int', 'value': 20, 'suffix': '%', 'limits': (0, 100)}
                  ]
 
