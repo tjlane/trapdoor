@@ -4,43 +4,6 @@
 This script provides a CLI to the guardian program.
 """
 
-import os
-import sys
-import stat
-import argparse
-import datetime
-import subprocess
-
-parser = argparse.ArgumentParser(description='Protect that CSPAD')
-
-parser.add_argument('-n', '--nodes', type=int, default=1,
-                    help='The number of nodes to run (8 cores/node)'
-                         '. Default: 1')
-parser.add_argument('-a', '--adu', type=int, default=10000,
-                    help='The ADU threshold (above this value is "saturated")'
-                         '. Default: 10,000')
-parser.add_argument('-c', '--consecutive', type=int, default=5,
-                    help='The number of consecutive shots that show damage'
-                         ' required to trip. Default: 5.')
-parser.add_argument('-p', '--perc', type=float, default=0.05,
-                    help='The fraction of the detector that needs to be saturated'
-                         'to activate a trip. Default: 0.05')
-
-args = parser.parse_args()
-
-
-hosts = ['daq-cxi-dss07',
-         'daq-cxi-dss08',
-         'daq-cxi-dss09',
-         'daq-cxi-dss10',
-         'daq-cxi-dss11',
-         'daq-cxi-dss12']
-         
-total_cspad_pixels = 32 * 185 * 388
-area_threshold = int( total_cspad_pixels * args.perc )
-         
-guardian.run_mpi(args.adu,
-                 args.consecutive,
-                 area_threshold,
-                 hosts[:args.nodes])
+from trapdoor import gui
+gui.main()
 

@@ -10,10 +10,16 @@ import time
 import zmq
 import datetime
 import subprocess
+import numpy as np
 
 import psana
-import epics
-import numpy as np
+try:
+    import epics
+    EPICS_IMPORTED = True
+except ImportError as e:
+    print 'Could not import EPICS'
+    EPICS_IMPORTED = False
+    
 
 from core import MapReducer, ShutdownInterrupt
 
@@ -39,8 +45,14 @@ class ShutterControl(object):
         """
 
         self.threshold = threshold
-        self._control = epics.PV('CXI:R52:EVR:01:TRIG2:TPOL')
-        self.debug_mode = debug_mode
+
+        if EPICS_IMPORTED:
+            self._control = epics.PV('CXI:R52:EVR:01:TRIG2:TPOL')
+            self.debug_mode = debug_mode
+        else:
+            print 'No epics, so setting shutter control to debug mode'
+            self._control = None
+            self.debug_mode = True
 
         return
     
@@ -74,10 +86,13 @@ class ShutterControl(object):
         
     @property
     def status(self):
-        if self._control.get():
-            return 'open'
+        if self._control:
+            if self._control.get():
+                return 'open'
+            else:
+                return 'closed'
         else:
-            return 'closed'
+            return 'not_connected'
         
 
     def close(self, timeout=5.0):
