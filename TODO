@@ -1,19 +1,25 @@
 TODO
 ----
 
--- threshold ordering for digitize
+v 0.1
+-----
+-- be able to set parameters interactively
+-- see if we can fix shutdown
 
 -- GUI should check to see if remote dies
 -- fix tachometer speed (so slow!)
 -- test multiple client binding
 
 -- test shuttering ability
--- cfg file
--- write Guardian doc strings
 -- check we can connect many shutter controls to the same endpoint
    (if not, we need to relay shutter controls through the master proc)
 
+-- cfg file
+-- write Guardian doc strings
 -- switch print statements to python logger
 
+v 0.2
+-----
+-- full flexible support for different cameras
 
 
