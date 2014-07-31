@@ -428,59 +428,35 @@ class CxiGuardian(MapReducer):
     # MAP functionality
     # 
     
-    @staticmethod
-    def digitize(x, bins, overwrite=True):
-        """
-        Similar to np.digitize, but faster, I hope. Bins must be monotonic.
-        """
-
-        # todo
-        raise NotImplementedError('not debugged')
-
-        if type(bins) == int:
-            bins = [bins]
-        
-        if not overwrite:
-            y = np.zeros(x.shape, dtype=np.int)
-        else:
-            y = x
-        
-        for i,b in enumerate(bins):
-            y[ y > b] = i + 1
-            if i == 0:
-                y[y <= b] = 0
-        
-        if overwrite:
-            y = y.astype(np.int)
-        
-        return y
-
-
-    def count_pixels_over_threshold(self, image, bins):
+    def count_pixels_over_threshold(self, image, thresholds):
         """
         Count the number of pixels in `image` that are greater than each
-        element of `bins`.
+        element of `thresholds`.
 
         Parameters
         ----------
         image : np.ndarray
             An image of any shape to threshold
 
-        bins : np.ndarray
-            A 1d array of monotonically increasing bins/thresholds
+        thresholds : np.ndarray
+            A 1d array of thresholds
 
         Returns
         -------
         pixel_counts : np.ndarray
-            An array the same shape and size as `bins`, where
+            An array the same shape and size as `thresholds`, where
             pixel_counts[i] contains the number of pixels in
             `image` greater than bins[i].
         """
 
         image = image.flatten()
-        pixel_counts = np.cumsum( np.bincount( np.digitize(image, bins) )[1:] )
+        pixel_counts = np.zeros(len(thresholds), dtype=np.int)
 
-        assert pixel_counts.shape[0] == len(bins), '%d %d' % (pixel_counts.shape[0], len(bins))
+        for i,t in enumerate(thresholds):
+            pixel_counts[i] = np.sum( image > t )
+        
+        assert pixel_counts.shape[0] == len(thresholds), '%d %d' % \
+                   (pixel_counts.shape[0], len(thresholds))
 
         return pixel_counts
     
@@ -516,12 +492,6 @@ class CxiGuardian(MapReducer):
         
         pixel_counts = np.zeros((self.num_monitors, self.num_cameras), dtype=np.int)
         
-        # we need the thresholds in monotonic order for self.digitize
-        # todo
-        #threshold_order = np.argsort(self.adu_thresholds)
-        #print self.adu_thresholds, threshold_order
-        #b = self.adu_thresholds[threshold_order]
-        
         b = self.adu_thresholds
         if type(b) == int: b = [b,] # needs to be iterable
         
@@ -539,10 +509,6 @@ class CxiGuardian(MapReducer):
         else:
             ds2_image = np.vstack([ ds2.quads(i).data() for i in range(4) ])
             pixel_counts[:,1] = self.count_pixels_over_threshold(ds2_image, b)
-
-        # put things back in their original order :: todo
-        #reverse_map = np.argsort(threshold_order)
-        #pixel_counts = pixel_counts[reverse_map,:]
 
         assert pixel_counts.shape == self._buffer.shape, 'buffer shape incorrect for map result'
         assert pixel_counts.dtype == self._buffer.dtype, 'buffer type incorrect for map result' 
@@ -578,7 +544,7 @@ class CxiGuardian(MapReducer):
         #        means that we need to evaluate it for 20% of the pixels...
 
         for i in range(self.num_monitors):
-            num_px_thsd = self._area_thresholds[i] * self._image_sizes[:] * 0.01
+            num_px_thsd = int(self._area_thresholds[i] * self._image_sizes[0] * 0.01)
             hitrate_buffer[0,i,:] = (pixel_counts[i,:] > num_px_thsd )
 
         return hitrate_buffer
