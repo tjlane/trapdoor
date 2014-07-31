@@ -3,8 +3,30 @@
 Really these are just random functions here temporarially.
 """
 
-
+import os
 import numpy as np
+
+
+def is_exe(fpath):
+    return os.path.isfile(fpath) and os.access(fpath, os.X_OK)
+
+def which(program):
+
+    fpath, fname = os.path.split(program)
+
+    r = None
+
+    if fpath:
+        if is_exe(program):
+            r = program
+    else:
+        for path in os.environ["PATH"].split(os.pathsep):
+            path = path.strip('"')
+            exe_file = os.path.join(path, program)
+            if is_exe(exe_file):
+                r = exe_file
+
+    return r
 
 
 def camera_datatypes(camera_name):
