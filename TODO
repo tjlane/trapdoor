@@ -1,10 +1,19 @@
 TODO
 ----
 
--- test Guardian as a stand-alone
+-- threshold ordering for digitize
+
+-- GUI should check to see if remote dies
+-- fix tachometer speed (so slow!)
+-- test multiple client binding
+
+-- test shuttering ability
+-- cfg file
 -- write Guardian doc strings
--- wire up ZMQ on GUI side
 -- check we can connect many shutter controls to the same endpoint
-----> if not, we need to relay shutter controls through the master proc
--- fix run, run_mpi functions
--- think about automatic process discovery
+   (if not, we need to relay shutter controls through the master proc)
+
+-- switch print statements to python logger
+
+
+

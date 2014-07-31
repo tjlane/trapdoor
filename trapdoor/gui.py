@@ -111,8 +111,9 @@ class TrapdoorWidget(QtGui.QWidget):
        
         print 'GUI: binding %s:%d for ZMQ PUSH' % (master_host, push_port) 
         self._zmq_push = self._zmq_context.socket(zmq.PUSH)
-        self._zmq_push.bind('tcp://%s:%d' % (master_host, push_port))
-        
+        #self._zmq_push.bind('tcp://%s:%d' % (master_host, push_port))
+        self._zmq_push.bind('tcp://127.0.0.1:%d' % push_port) # todo
+
         return
     
         
@@ -158,6 +159,9 @@ class TrapdoorWidget(QtGui.QWidget):
         
         self._upper_plot = graphics_layout.addPlot(title="DS1")
         self._upper_plot.addLegend()
+        self._upper_plot.setLabel('bottom', 'Time', units='s')
+        self._upper_plot.setLabel('left', 'Hitrate')
+        self._upper_plot.setYRange(0.0, 1.0, update=False)
         
         self._upper_curves = []
         for i,n in enumerate( self.threshold_names ):
@@ -167,6 +171,9 @@ class TrapdoorWidget(QtGui.QWidget):
         
         self._lower_plot = graphics_layout.addPlot(title="DS2")
         self._lower_plot.addLegend()
+        self._lower_plot.setLabel('bottom', 'Time', units='s')
+        self._lower_plot.setLabel('left', 'Hitrate')
+        self._lower_plot.setYRange(0.0, 1.0, update=False)
         
         self._lower_curves = []
         for i,n in enumerate( self.threshold_names ):
@@ -183,17 +190,24 @@ class TrapdoorWidget(QtGui.QWidget):
         """
         
         params = [
-                  {'name': 'damage :: Saturation Threshold', 'type': 'int', 'value': 50000, 'suffix': 'ADU'},
-                  {'name': 'damage :: Area Threshold', 'type': 'int', 'value': 20, 'suffix': '%', 'limits': (0, 100)},
+                  {'name': 'damage :: Saturation Threshold', 'type': 'int', 
+                       'value': 50000, 'suffix': 'ADU'},
+                  {'name': 'damage :: Area Threshold', 'type': 'int', 
+                       'value': 20, 'suffix': '%', 'limits': (0, 100)},
                   
-                  {'name': 'xtal :: Saturation Threshold', 'type': 'int', 'value': 5000, 'suffix': 'ADU'},
-                  {'name': 'xtal :: Area Threshold', 'type': 'int', 'value': 1, 'suffix': '%', 'limits': (0, 100)},
+                  {'name': 'xtal :: Saturation Threshold', 'type': 'int',
+                      'value': 5000, 'suffix': 'ADU'},
+                  {'name': 'xtal :: Area Threshold', 'type': 'int',
+                      'value': 1, 'suffix': '%', 'limits': (0, 100)},
                   
-                  {'name': 'diffuse :: Saturation Threshold', 'type': 'int', 'value': 1000, 'suffix': 'ADU'},
-                  {'name': 'diffuse :: Area Threshold', 'type': 'int', 'value': 20, 'suffix': '%', 'limits': (0, 100)}
+                  {'name': 'diffuse :: Saturation Threshold', 'type': 'int',
+                       'value': 1000, 'suffix': 'ADU'},
+                  {'name': 'diffuse :: Area Threshold', 'type': 'int',
+                       'value': 20, 'suffix': '%', 'limits': (0, 100)}
                  ]
 
-        self._params = Parameter.create(name='params', type='group', children=params)
+        self._params = Parameter.create(name='params', type='group', 
+                                        children=params)
         self._params.sigTreeStateChanged.connect(self._enable_apply)
 
         t = ParameterTree()
@@ -214,7 +228,6 @@ class TrapdoorWidget(QtGui.QWidget):
                 #'daq-cxi-dss12']
         
         self._host_text_widget = QtGui.QTextEdit(', \n'.join(text))
-        
         layout.addWidget(self._host_text_widget, 1, 1)
         
         return
@@ -224,6 +237,7 @@ class TrapdoorWidget(QtGui.QWidget):
         
         text = 'No current running processes....' + '\n' * 10
         self._status_text_widget = QtGui.QLabel(text)
+        self._status_text_widget.setFont( QtGui.QFont('Courier', 11) )
         
         layout.addWidget(self._status_text_widget, 2, 1)
         
@@ -291,10 +305,11 @@ class TrapdoorWidget(QtGui.QWidget):
         return
     
         
-    def _set_plot_data(self, hitrates):
+    def _set_plot_data(self, hitrates, window_size):
+ 
+        time_axis = np.arange(0.0, hitrates.shape[0], float(window_size)/120.0)
         
         for i,n in enumerate(self.threshold_names):
-            print 'setting data for %d:%s | %f' % (i,n, hitrates[:,i,0].mean())
             self._lower_curves[i].setData( hitrates[:,i,0] )
             self._upper_curves[i].setData( hitrates[:,i,1] )
             
@@ -313,7 +328,7 @@ class TrapdoorWidget(QtGui.QWidget):
         self.set_status_text('Launching monitor process...')
         print 'GUI: Launching monitor process...'
         guardian.run_mpi(self.monitor_list, self.hosts)
-        self.set_status_text('Monitor launched, waiting for reply (takes ~30 sec).')
+        self.set_status_text('Monitor launched\nWaiting for reply (takes ~30 sec).')
         print 'GUI: Monitor launched'
         return
     
@@ -411,7 +426,7 @@ class TrapdoorWidget(QtGui.QWidget):
         # --- report to the user ---
         
         # update plots
-        self._set_plot_data(hitrates)
+        self._set_plot_data(hitrates, window_size)
         
         
         # print to console
@@ -442,7 +457,7 @@ def main():
     app = QtGui.QApplication(sys.argv)
     
     test_gui = TrapdoorWidget()
-    test_gui._set_plot_data( np.zeros((120,3,2)) )
+    test_gui._set_plot_data( np.zeros((300,3,2)), 120 )
     test_gui.show()
     
     print test_gui.hosts

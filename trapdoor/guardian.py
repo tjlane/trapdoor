@@ -156,6 +156,22 @@ class ShutterControl(object):
 class CxiGuardian(MapReducer):
     """
     Contains the message passing interface between shmem and the GUI.
+
+    Some documentation on the more cryptic objects contained herein
+
+    pixel_counts:
+    The pixel counts is a (threshold monitor X camera) array containing
+    the number of pixels over threshold in an image.
+
+    hitrate_buffer :
+    The hitrate buffer is a (window size X threshold monitor X camera)
+    array containing a one or zero indicating if each of the previous
+    `window size` shots was a hit or not.
+
+    history_buffer :
+    A (history_size X threshold monitor X camera) array, containing the
+    last `history_size` windows, averaged to compute a moving average
+    hitrate. This is what gets plotted by the GUI.
     """
     
     
@@ -186,15 +202,16 @@ class CxiGuardian(MapReducer):
         for m in monitors:
             self.add_monitor(*m)
 
-        self._zmq_ready = 0
-
         # manually init the MapReduce class
         self._source  = 'cxishmem'
-        #self.register_cfg_file('/reg/neh/home2/tjlane/opt/trapdoor/trapdoor/default.cfg') # todo
+        self.register_cfg_file('/reg/neh/home2/tjlane/opt/trapdoor/trapdoor/default.cfg') # todo 
         self._use_array_comm = True
 
         self.num_reduced_events = 0
-        self._analysis_frequency = 120
+        self._analysis_frequency = window_size
+
+        if self.role == 'master':
+            self.init_zmq()
 
         return
     
@@ -317,8 +334,6 @@ class CxiGuardian(MapReducer):
         self._zmq_publish = self._zmq_context.socket(zmq.PUB)
         self._zmq_publish.bind('tcp://*:%s' % pub_port)
 
-        self._zmq_ready = 1
-
         return
     
         
@@ -344,7 +359,8 @@ class CxiGuardian(MapReducer):
             stats[p] = getattr(self, p)
             
         # also throw in specifics
-        stats['hitrates'] = self._result
+        stats['hitrates'] = self._history_buffer
+        #stats['hitrates'] = None
         
         if isinstance(self.shutter_control, ShutterControl):
             stats['shutter_control_threshold'] = self.shutter_control.threshold
@@ -368,9 +384,6 @@ class CxiGuardian(MapReducer):
             Additional statistics to communicate. Should be keyed by a string
             describing the value.
         """
-
-        if not self._zmq_ready:
-           self.init_zmq()
 
 
         # ---- publish data widely (to monitors)
@@ -440,9 +453,31 @@ class CxiGuardian(MapReducer):
 
 
     def count_pixels_over_threshold(self, image, bins):
+        """
+        Count the number of pixels in `image` that are greater than each
+        element of `bins`.
+
+        Parameters
+        ----------
+        image : np.ndarray
+            An image of any shape to threshold
+
+        bins : np.ndarray
+            A 1d array of monotonically increasing bins/thresholds
+
+        Returns
+        -------
+        pixel_counts : np.ndarray
+            An array the same shape and size as `bins`, where
+            pixel_counts[i] contains the number of pixels in
+            `image` greater than bins[i].
+        """
+
         image = image.flatten()
-        pixel_counts = np.bincount( np.digitize(image, bins) )[1:]
+        pixel_counts = np.cumsum( np.bincount( np.digitize(image, bins) )[1:] )
+
         assert pixel_counts.shape[0] == len(bins), '%d %d' % (pixel_counts.shape[0], len(bins))
+
         return pixel_counts
     
         
@@ -535,7 +570,8 @@ class CxiGuardian(MapReducer):
         # a hit or not (is hit if there are a sufficient number of pixels above
         # the "area" threshold) and store that value in a running buffer
         for i in range(self.num_monitors):
-            hitrate_buffer[0,i,:] = pixel_counts[i,:] > self._area_thresholds[i]
+            hitrate_buffer[0,i,:] = (pixel_counts[i,:] > self._area_thresholds[i])
+            print pixel_counts[0,:].mean(), self._area_thresholds[0]
 
         return hitrate_buffer
     
@@ -551,9 +587,9 @@ class CxiGuardian(MapReducer):
             ( buffer length, num thresholds, number of cameras [ds1 & ds2] )
             
         """
-        nt = self.num_monitors
-        ws = self.history_size
-        self._history_buffer = np.zeros((ws, nt, 2), dtype=np.int)
+        nm = self.num_monitors
+        hs = self.history_size
+        self._history_buffer = np.zeros((hs, nm, 2), dtype=np.int)
         return
     
         
@@ -563,16 +599,18 @@ class CxiGuardian(MapReducer):
         Communicate with the world
         """
 
-        # compute the hitrate for the last few shots
-        hitrate = np.mean(hitrate_buffer, axis=0)
+        if self.num_reduced_events % self._analysis_frequency == 0:
+
+            # compute the hitrate for the last few shots
+            hitrate = np.mean(hitrate_buffer, axis=0)
         
-        # insert hitrate values into the history buffer
-        assert hitrate.shape == self._history_buffer.shape[1:]
-        self._history_buffer = np.roll(self._history_buffer, 1, axis=0)
-        self._history_buffer[0,:,:] = hitrate
+            # insert hitrate values into the history buffer
+            assert hitrate.shape == self._history_buffer.shape[1:]
+            self._history_buffer = np.roll(self._history_buffer, 1, axis=0)
+            self._history_buffer[0,:,:] = hitrate
         
         # periodically communicate the results
-        if self.num_reduced_events % self._analysis_frequency == 0:
+        # if self.num_reduced_events % self._analysis_frequency == 0:
             self.communicate()
         
         return

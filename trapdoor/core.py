@@ -58,11 +58,7 @@ class OnlinePsana(object):
     def shutdown(self):
         # likely not the best way to do this
         print "shutting down all processes..."
-        try:
-            MPI.Finalize()
-        except Exception as e:
-            print e
-            comm.Abort(1) # eeek! should take everything down immediately
+        COMM.Abort(0) # eeek! should take everything down immediately
         return
     
         
@@ -228,7 +224,7 @@ class MapReducer(OnlinePsana):
         return MPI_RANK
     
         
-    def start(self, verbose=True):
+    def start(self, verbose=False):
         """
         Begin the map-reduce procedure.
         """
@@ -343,8 +339,11 @@ class MapReducer(OnlinePsana):
         Publish statistics to a monitoring process.
         """
 
-        self.tachometer(verbose=False)
-        
+        #self.tachometer(verbose=False)
+
+        # TMP FOR DEBUG
+        self.mean_rate = 3.0
+
         stats = {
                  'num_procs'      : MPI_SIZE,
                  'per_proc_rate'  : self.mean_rate,
