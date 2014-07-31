@@ -315,6 +315,11 @@ class CxiGuardian(MapReducer):
     @property
     def window_size(self):
         return self._window_size
+
+    @property
+    def _image_sizes(self):
+        x = 32 * 185 * 388 # hardcoded for large CSPAD : todo
+        return np.array([x, x])
         
     # ------------
     # COMMUNICATIONS
@@ -387,7 +392,6 @@ class CxiGuardian(MapReducer):
 
 
         # ---- publish data widely (to monitors)
-        print 'MASTER: sending results to GUI'
         self._zmq_publish.send('stats', zmq.SNDMORE)
         self._zmq_publish.send_pyobj(self.stats)
         
@@ -569,9 +573,13 @@ class CxiGuardian(MapReducer):
         # for each data type (diffuse/xtal/damage), compute if this shot is
         # a hit or not (is hit if there are a sufficient number of pixels above
         # the "area" threshold) and store that value in a running buffer
+        # 
+        # NOTE : recall that area_thresholds are stored as %s, so e.g. "20"
+        #        means that we need to evaluate it for 20% of the pixels...
+
         for i in range(self.num_monitors):
-            hitrate_buffer[0,i,:] = (pixel_counts[i,:] > self._area_thresholds[i])
-            print pixel_counts[0,:].mean(), self._area_thresholds[0]
+            num_px_thsd = self._area_thresholds[i] * self._image_sizes[:] * 0.01
+            hitrate_buffer[0,i,:] = (pixel_counts[i,:] > num_px_thsd )
 
         return hitrate_buffer
     

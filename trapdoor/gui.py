@@ -191,7 +191,7 @@ class TrapdoorWidget(QtGui.QWidget):
         
         params = [
                   {'name': 'damage :: Saturation Threshold', 'type': 'int', 
-                       'value': 50000, 'suffix': 'ADU'},
+                       'value': 10000, 'suffix': 'ADU'},
                   {'name': 'damage :: Area Threshold', 'type': 'int', 
                        'value': 20, 'suffix': '%', 'limits': (0, 100)},
                   
@@ -361,9 +361,7 @@ class TrapdoorWidget(QtGui.QWidget):
         try:
             topic    = self._zmq_sub.recv(zmq.NOBLOCK)
             mon_data = self._zmq_sub.recv_pyobj(zmq.NOBLOCK)
-            print 'GUI: recieved stats msg'
         except zmq.Again as e:
-            #print 'GUI: No remote detected...'
             return
 
         # if we got data, but are in the 'ready' state, toggle to 'running' state
@@ -388,11 +386,13 @@ class TrapdoorWidget(QtGui.QWidget):
             remote_area = mon_data['area_thresholds'][i]
             
             if not remote_adu == local_parms['%s :: Saturation Threshold' % n]:
-                print 'ADU Threshold mismatch between GUI and remote (%d/%d)' % remote_adu, local_parms['%s :: Saturation Threshold' % n]
+                print 'ADU Threshold mismatch between GUI and remote (%d/%d)' \
+                          % remote_adu, local_parms['%s :: Saturation Threshold' % n]
                 raise RuntimeError('No known method exists to resolve mismatch conflict') # todo
                 
             if not remote_area == local_parms['%s :: Area Threshold' % n]:
-                print 'AREA Threshold mismatch between GUI and remote (%d/%d)' % (remote_area, local_parms['%s :: Area Threshold' % n])
+                print 'AREA Threshold mismatch between GUI and remote (%d/%d)' \
+                          % (remote_area, local_parms['%s :: Area Threshold' % n])
                 raise RuntimeError('No known method exists to resolve mismatch conflict') # todo
         
             
@@ -420,7 +420,7 @@ class TrapdoorWidget(QtGui.QWidget):
         one_min_hitrate = {}
         one_min_index = int(60.0 * window_size / 120.0)
         for i,n in enumerate( mon_data['monitor_names'] ):
-            one_min_hitrate[n] = np.mean( hitrates[i,:one_min_index] )
+            one_min_hitrate[n] = tuple(np.mean( hitrates[:one_min_index,i,:], axis=0 ))
             
             
         # --- report to the user ---
@@ -432,7 +432,7 @@ class TrapdoorWidget(QtGui.QWidget):
         # print to console
         # todo: consider printing set threshold parameters
         text = ['Monitor Statistics',
-                '---------------------------------',
+                '------------------------------------',
                 'Active processes      : %d'      % num_procs,
                 'Active hosts          : %d'      % num_active_hosts,
                 'Per-process data rate : %.2f Hz' % per_proc_rate,
@@ -440,11 +440,11 @@ class TrapdoorWidget(QtGui.QWidget):
                 'Events processed      : %d'      % evts_processed,
                 'Active cameras        : %d'      % num_cameras,
                 'Shutter threshold     : %d ADU'  % shutter_tshd,
-                '---------------------------------',
-                '1min CSPAD damage lvl : %.2f'    % one_min_hitrate['damage'],
-                '1min xtal hitrate     : %.2f'    % one_min_hitrate['xtal'],
-                '1min diffuse hitrate  : %.2f'    % one_min_hitrate['diffuse'],
-                '---------------------------------'
+                '------------------------------------',
+                '1min CSPAD damage lvl : %.2f / %.2f' % one_min_hitrate['damage'],
+                '1min xtal hitrate     : %.2f / %.2f' % one_min_hitrate['xtal'],
+                '1min diffuse hitrate  : %.2f / %.2f' % one_min_hitrate['diffuse'],
+                '------------------------------------'
                 ]
         
         self.set_status_text('\n'.join(text))
