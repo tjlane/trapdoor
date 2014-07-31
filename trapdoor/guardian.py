@@ -6,11 +6,13 @@ that actually processes data in real time and operates the shutter.
 """
 
 import os
+import sys
 import re
 import time
 import zmq
 import datetime
 import subprocess
+import socket
 import numpy as np
 
 
@@ -335,15 +337,17 @@ class CxiGuardian(MapReducer):
         """
 
         self._zmq_context = zmq.Context()
+        #master_host = socket.gethostbyname_ex(self.stats['hosts'][0])[-1][0] # gives ip
+        master_host = self.master_host
 
         topic = 'instructions'
         self._zmq_recv = self._zmq_context.socket(zmq.SUB)
-        self._zmq_recv.connect('tcp://127.0.0.1:%s' % recv_port)
+        self._zmq_recv.connect('tcp://%s:%d' % (master_host, recv_port))
         self._zmq_recv.setsockopt(zmq.SUBSCRIBE, topic)
 
         if self.role == 'master':
             self._zmq_publish = self._zmq_context.socket(zmq.PUB)
-            self._zmq_publish.bind('tcp://*:%s' % pub_port)
+            self._zmq_publish.bind('tcp://*:%d' % pub_port)
 
         return
     

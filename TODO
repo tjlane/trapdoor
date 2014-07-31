@@ -3,8 +3,6 @@ TODO
 
 v 0.1
 -----
--- be able to set parameters interactively
--- see if we can fix shutdown
 
 -- GUI should check to see if remote dies
 -- fix tachometer speed (so slow!)

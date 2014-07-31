@@ -63,7 +63,7 @@ class TrapdoorWidget(QtGui.QWidget):
         """
         s = str(self._host_text_widget.toPlainText())
         l = s.split(',')
-        return l
+        return [x.strip() for x in l]
     
         
     @property
@@ -111,8 +111,7 @@ class TrapdoorWidget(QtGui.QWidget):
        
         print 'GUI: binding %s:%d for ZMQ PUB' % (master_host, pub_port) 
         self._zmq_pub = self._zmq_context.socket(zmq.PUB)
-        #self._zmq_push.bind('tcp://%s:%d' % (master_host, push_port))
-        self._zmq_pub.bind('tcp://127.0.0.1:%d' % pub_port) # todo
+        self._zmq_pub.bind('tcp://%s:%d' % (master_host, pub_port))
 
         return
     
@@ -221,8 +220,8 @@ class TrapdoorWidget(QtGui.QWidget):
         
     def _draw_host_text(self, layout):
         
-        text = ['daq-cxi-dss07'] #,
-                #'daq-cxi-dss08',
+        text = ['daq-cxi-dss07',
+                'daq-cxi-dss08'] #,
                 #'daq-cxi-dss09',
                 #'daq-cxi-dss10',
                 #'daq-cxi-dss11',

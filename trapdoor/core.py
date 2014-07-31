@@ -70,7 +70,30 @@ class OnlinePsana(object):
             sys.exit(0)
 
         return
-    
+
+
+    @property
+    def MPI_RANK(self):
+        return MPI_RANK
+
+
+    @property
+    def hosts(self):
+        hosts = COMM.gather(MPI.Get_processor_name(), root=0)
+        if hosts:
+            hosts = list( np.unique(hosts) )
+        hosts = COMM.bcast(hosts, root=0)
+        return hosts
+
+    @property
+    def master_host(self):
+        if self.role == 'master':
+            h = MPI.Get_processor_name()
+        else:
+            h = None
+        h = COMM.bcast(h, root=0)
+        return h
+
         
     @property
     def cfg_file(self):
@@ -229,10 +252,6 @@ class MapReducer(OnlinePsana):
 
         return
 
-    @property
-    def MPI_RANK(self):
-        return MPI_RANK
-    
         
     def start(self, verbose=False):
         """
@@ -388,7 +407,8 @@ class MapReducer(OnlinePsana):
                  'num_procs'      : MPI_SIZE,
                  'per_proc_rate'  : self.mean_rate,
                  'evts_processed' : self.num_reduced_events,
-                 'hosts'          : ['unknown_not_implemented']
+                 'hosts'          : self.hosts,
+                 'master_host'    : self.master_host
                 }
 
         return stats
