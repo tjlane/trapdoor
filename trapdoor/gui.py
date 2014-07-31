@@ -98,7 +98,7 @@ class TrapdoorWidget(QtGui.QWidget):
         return monitor_list
     
         
-    def _init_zmq(self, sub_port=4747, push_port=4748):
+    def _init_zmq(self, sub_port=4747, pub_port=4748):
         
         self._zmq_context = zmq.Context()
         master_host = socket.gethostbyname_ex(self.hosts[0])[-1][0] # gives ip
@@ -109,22 +109,23 @@ class TrapdoorWidget(QtGui.QWidget):
         self._zmq_sub.connect('tcp://%s:%d' % (master_host, sub_port))
         self._zmq_sub.setsockopt(zmq.SUBSCRIBE, topic)
        
-        print 'GUI: binding %s:%d for ZMQ PUSH' % (master_host, push_port) 
-        self._zmq_push = self._zmq_context.socket(zmq.PUSH)
+        print 'GUI: binding %s:%d for ZMQ PUB' % (master_host, pub_port) 
+        self._zmq_pub = self._zmq_context.socket(zmq.PUB)
         #self._zmq_push.bind('tcp://%s:%d' % (master_host, push_port))
-        self._zmq_push.bind('tcp://127.0.0.1:%d' % push_port) # todo
+        self._zmq_pub.bind('tcp://127.0.0.1:%d' % pub_port) # todo
 
         return
     
         
     def _send_zmq_message(self, identifier, msg):
         """
-        Sends the message `msg` to an active monitor using a ZMQ push. The idea
+        Sends the message `msg` to an active monitor using a ZMQ pub. The idea
         is that `identifier` tells the remote process what to do with the data
         in `msg`.
         """
         print 'GUI: sending message, %s %s' % (identifier, msg)
-        self._zmq_push.send_pyobj((identifier, msg))
+        self._zmq_pub.send('instructions', zmq.SNDMORE)
+        self._zmq_pub.send_pyobj((identifier, msg))
         return
     
         
@@ -328,7 +329,7 @@ class TrapdoorWidget(QtGui.QWidget):
         self.set_status_text('Launching monitor process...')
         print 'GUI: Launching monitor process...'
         guardian.run_mpi(self.monitor_list, self.hosts)
-        self.set_status_text('Monitor launched\nWaiting for reply (takes ~30 sec).')
+        self.set_status_text('Monitor launched\nWaiting for reply (takes ~30 sec)')
         print 'GUI: Monitor launched'
         return
     
@@ -377,7 +378,7 @@ class TrapdoorWidget(QtGui.QWidget):
             print 'Threshold monitor mismatch between GUI and remote Guardian'
             print 'GUI:    %s' % str(self.threshold_names)
             print 'Remote: %d' % str(mon_data['monitor_names'])
-            raise RuntimeError('No known method exists to resolve mismatch conflict') # todo
+            #raise RuntimeError('No known method exists to resolve mismatch conflict') # todo
         
         # --> ensure that the set parameters match 
         local_parms = self.parameters
@@ -386,14 +387,14 @@ class TrapdoorWidget(QtGui.QWidget):
             remote_area = mon_data['area_thresholds'][i]
             
             if not remote_adu == local_parms['%s :: Saturation Threshold' % n]:
-                print 'ADU Threshold mismatch between GUI and remote (%d/%d)' \
-                          % remote_adu, local_parms['%s :: Saturation Threshold' % n]
-                raise RuntimeError('No known method exists to resolve mismatch conflict') # todo
+                print 'ADU Threshold mismatch between remote and GUI (%d/%d)' \
+                          % (remote_adu, local_parms['%s :: Saturation Threshold' % n])
+                #raise RuntimeError('No known method exists to resolve mismatch conflict') # todo
                 
             if not remote_area == local_parms['%s :: Area Threshold' % n]:
-                print 'AREA Threshold mismatch between GUI and remote (%d/%d)' \
+                print 'AREA Threshold mismatch between remote and GUI (%d/%d)' \
                           % (remote_area, local_parms['%s :: Area Threshold' % n])
-                raise RuntimeError('No known method exists to resolve mismatch conflict') # todo
+                #raise RuntimeError('No known method exists to resolve mismatch conflict') # todo
         
             
         # --> get metadata from the CxiGuardian cls

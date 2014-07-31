@@ -55,10 +55,20 @@ class OnlinePsana(object):
         return self._source
     
         
-    def shutdown(self):
-        # likely not the best way to do this
-        print "shutting down all processes..."
-        COMM.Abort(0) # eeek! should take everything down immediately
+    def shutdown(self, msg='reason not provided'):
+
+        print "shutting down (%s)" % msg
+
+        if self.role == 'worker':
+            sys.exit(0)
+
+        if self.role == 'master':
+            try:
+                MPI.Finalize()
+            except:
+                COMM.Abort(0) # eeek! should take everything down immediately
+            sys.exit(0)
+
         return
     
         
@@ -281,6 +291,8 @@ class MapReducer(OnlinePsana):
                 if verbose:
                     if event_index % 100 == 0:
                         print '%d evts processed on RANK %d' % (event_index, MPI_RANK)
+
+                self.worker_extras()
                 
            
         # master loops continuously, looking for communicated from workers & 
@@ -308,6 +320,8 @@ class MapReducer(OnlinePsana):
                         if self.num_reduced_events % 100 == 0:
                             print '%d evts reduced' % self.num_reduced_events 
  
+                    self.master_extras()
+
 
             except KeyboardInterrupt as e:
                 print 'Recieved keyboard sigterm...'
@@ -332,6 +346,32 @@ class MapReducer(OnlinePsana):
         self._running = False
         return
     
+
+    def extras(self):
+        """
+        Overwrite this function for anything both masters and workers
+        should do every cycle.
+        """
+        return
+
+
+    def master_extras(self):
+        """
+        Overwrite this function for anything just masters
+        should do every cycle.
+        """
+        self.extras()
+        return
+
+
+    def worker_extras(self):
+        """
+        Overwrite this function for anything just workers
+        should do every cycle.
+        """
+        self.extras()
+        return
+
 
     @property
     def stats(self):

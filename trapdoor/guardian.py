@@ -6,6 +6,7 @@ that actually processes data in real time and operates the shutter.
 """
 
 import os
+import re
 import time
 import zmq
 import datetime
@@ -210,8 +211,7 @@ class CxiGuardian(MapReducer):
         self.num_reduced_events = 0
         self._analysis_frequency = window_size
 
-        if self.role == 'master':
-            self.init_zmq()
+        self.init_zmq()
 
         return
     
@@ -258,13 +258,9 @@ class CxiGuardian(MapReducer):
     def set_monitor_thresholds(self, name, adu_threshold, area_threshold):
         
         # todo : may want to check threshold sanity
-        
-        if name not in self.monitor_names:
-            raise KeyError('Monitor: %s not registered yet, cannot update '
-                           'threshold values')
-        else:
-            mon_index = np.where( np.array(self.monitor_names) == name )[0][0]
-        
+
+        mon_index = self.mon_index(name)
+
         self._adu_thresholds[mon_index]  = adu_threshold
         self._area_thresholds[mon_index] = area_threshold
         
@@ -320,12 +316,19 @@ class CxiGuardian(MapReducer):
     def _image_sizes(self):
         x = 32 * 185 * 388 # hardcoded for large CSPAD : todo
         return np.array([x, x])
+
+    def mon_index(self, monitor_name):
+        if monitor_name not in self.monitor_names:
+            raise KeyError('Monitor: %s not registered yet, cannot update '
+                           'threshold values' % monitor_name)
+        return np.where( np.array(self.monitor_names) == monitor_name )[0][0]
+        
         
     # ------------
     # COMMUNICATIONS
     #
     
-    def init_zmq(self, pub_port=4747, pull_port=4748):
+    def init_zmq(self, pub_port=4747, recv_port=4748):
         """
         Initialize the ZMQ protocol, preparing the class for inter-process
         communication.
@@ -333,11 +336,14 @@ class CxiGuardian(MapReducer):
 
         self._zmq_context = zmq.Context()
 
-        self._zmq_pull = self._zmq_context.socket(zmq.PULL)
-        self._zmq_pull.connect('tcp://127.0.0.1:%s' % pull_port)
+        topic = 'instructions'
+        self._zmq_recv = self._zmq_context.socket(zmq.SUB)
+        self._zmq_recv.connect('tcp://127.0.0.1:%s' % recv_port)
+        self._zmq_recv.setsockopt(zmq.SUBSCRIBE, topic)
 
-        self._zmq_publish = self._zmq_context.socket(zmq.PUB)
-        self._zmq_publish.bind('tcp://*:%s' % pub_port)
+        if self.role == 'master':
+            self._zmq_publish = self._zmq_context.socket(zmq.PUB)
+            self._zmq_publish.bind('tcp://*:%s' % pub_port)
 
         return
     
@@ -365,7 +371,6 @@ class CxiGuardian(MapReducer):
             
         # also throw in specifics
         stats['hitrates'] = self._history_buffer
-        #stats['hitrates'] = None
         
         if isinstance(self.shutter_control, ShutterControl):
             stats['shutter_control_threshold'] = self.shutter_control.threshold
@@ -376,53 +381,79 @@ class CxiGuardian(MapReducer):
         return stats
         
 
-    def communicate(self):
+    def publish(self):
         """
-        Communicate with remote monitoring processes. This function:
-        
-            (1) Publishes statistics, broadcasting to any number of monitors
-            (2) Checks for remote messages asking for a change of state
-            
-        Parameters
-        ----------
-        stats : dict
-            Additional statistics to communicate. Should be keyed by a string
-            describing the value.
+        publish data widely (to monitors)
         """
 
-
-        # ---- publish data widely (to monitors)
         self._zmq_publish.send('stats', zmq.SNDMORE)
         self._zmq_publish.send_pyobj(self.stats)
         
-        
-        # ---- check for remote messages and take action
+        return
+
+
+    def recv(self):
+        """
+        check for remote messages and take action
+        """
+
         try:
-            instructions, content = self._zmq_pull.recv_pyobj(zmq.NOBLOCK)
-            print 'MASTER: recv msg: %s - %s' % (instructions, content)
+            topic = self._zmq_recv.recv(zmq.NOBLOCK)
+            instructions, content = self._zmq_recv.recv_pyobj(zmq.NOBLOCK)
+            print 'recv msg: %s:%s' % (instructions, content)
         except zmq.Again as e:
             return # this means no new message
             
         # parse the message...
         if instructions == 'shutdown':
-            self._shutdown(msg='remote process requested shutdown')
+            self.shutdown(msg='remote process requested shutdown')
             
         elif instructions == 'set_parameters':
-            # todo
-            raise NotImplementedError('asking for param update')
+            self.set_parameters(content)
             
         else:
-            raise RuntimeError('Remote message not understood: %s' % msg)
+            raise RuntimeError('Remote message not understood: %s:%s' % (instructions, content))
 
         return
         
-        
-    def _shutdown(self, msg='cause unspecified'):
+
+    def set_parameters(self, new_parameters):
         """
-        Throw an exception capable of taking down the entire MPI process.
+        Set the threshold parameters to new values.
+
+        Parameters
+        ----------
+        new_parameters : dict
+            A dict where the keys are "monitor :: {Area,Saturation} Threshold"
+            and the values are the new parameter values.
         """
-        raise ShutdownInterrupt('Calling for MPI shutdown :: %s' % msg)
+
+        for k,v in new_parameters.items():
+
+            g = re.match('(\w+)\s+::\s+(\w+) [Tt]hreshold', k)
+
+            name = g.group(1)
+            i = self.mon_index(name)
+
+            # todo : check threshold sanity
+
+            p_type = g.group(2) # {Area, Saturation}
+            if p_type == 'Area':
+                self._area_thresholds[i] = v
+            elif p_type == 'Saturation':
+                self._adu_thresholds[i] = v
+            else:
+                raise KeyError('No parameter type: %s. Must be one of'
+                               ' {Area,Saturation}' % p_type)
+            print 'Set %s %s threshold to: %s' % (self.monitor_names[i], p_type, str(v))
+    
         return
+
+
+    def extras(self):
+        self.recv()
+        return
+
         
     # ------------
     # MAP functionality
@@ -457,6 +488,8 @@ class CxiGuardian(MapReducer):
         
         assert pixel_counts.shape[0] == len(thresholds), '%d %d' % \
                    (pixel_counts.shape[0], len(thresholds))
+
+        #print thresholds, pixel_counts
 
         return pixel_counts
     
@@ -582,10 +615,8 @@ class CxiGuardian(MapReducer):
             assert hitrate.shape == self._history_buffer.shape[1:]
             self._history_buffer = np.roll(self._history_buffer, 1, axis=0)
             self._history_buffer[0,:,:] = hitrate
-        
-        # periodically communicate the results
-        # if self.num_reduced_events % self._analysis_frequency == 0:
-            self.communicate()
+            
+            self.publish() 
         
         return
         
