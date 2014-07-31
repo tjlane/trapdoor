@@ -12,6 +12,7 @@ import datetime
 import subprocess
 import numpy as np
 
+
 import psana
 try:
     import epics
@@ -22,6 +23,7 @@ except ImportError as e:
     
 
 from core import MapReducer, ShutdownInterrupt
+from aux import which
 
 
 class ShutterControl(object):
@@ -654,12 +656,8 @@ def run_mpi(monitors, hosts):
         raise IOError('No route to host: %s' % host)
 
     # try and find MPI
-    lcls_mpi = '/reg/common/package/openmpi/openmpi-1.8/install/bin/mpirun'
-    if os.path.exists(lcls_mpi):
-        mpi_bin = '/reg/common/package/openmpi/openmpi-1.8/install/bin/mpirun'
-    elif 'mpirun' in os.environ['PATH']:
-        mpi_bin = 'mpirun'
-    else:
+    mpi_bin = which('mpirun')
+    if mpi_bin == None:
         raise RuntimeError('Could not find an MPI `mpirun` executable!')
 
     cmd = [mpi_bin,
