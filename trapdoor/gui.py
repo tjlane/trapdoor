@@ -126,6 +126,12 @@ class TrapdoorWidget(QtGui.QWidget):
         self._zmq_pub.send('instructions', zmq.SNDMORE)
         self._zmq_pub.send_pyobj((identifier, msg))
         return
+
+
+    def closeEvent(self, evnt):
+        #shutdown
+        super(TrapdoorWidget, self).closeEvent(evnt)
+        return
     
         
     def _draw_canvas(self):
@@ -140,6 +146,7 @@ class TrapdoorWidget(QtGui.QWidget):
         self._draw_plots(layout)
         self._draw_text_inputs(layout)
         self._draw_host_text(layout)
+        self._draw_protection_button(layout)
         self._draw_apply_button(layout)
         self._draw_launch_button(layout)
         self._draw_status_text(layout)
@@ -179,7 +186,7 @@ class TrapdoorWidget(QtGui.QWidget):
         for i,n in enumerate( self.threshold_names ):
             self._lower_curves.append( self._lower_plot.plot(name=n, pen=self.colors[i]) )
         
-        layout.addWidget(graphics_layout, 0, 0, 5, 1)
+        layout.addWidget(graphics_layout, 0, 0, 6, 1)
         
         return
     
@@ -221,10 +228,10 @@ class TrapdoorWidget(QtGui.QWidget):
     def _draw_host_text(self, layout):
         
         text = ['daq-cxi-dss07',
-                'daq-cxi-dss08'] #,
-                #'daq-cxi-dss09',
-                #'daq-cxi-dss10',
-                #'daq-cxi-dss11',
+                'daq-cxi-dss08',
+                'daq-cxi-dss09',
+                'daq-cxi-dss10',
+                'daq-cxi-dss11'] #,
                 #'daq-cxi-dss12']
         
         self._host_text_widget = QtGui.QTextEdit(', \n'.join(text))
@@ -242,6 +249,19 @@ class TrapdoorWidget(QtGui.QWidget):
         layout.addWidget(self._status_text_widget, 2, 1)
         
         return
+
+
+    def _draw_protection_button(self, layout):
+
+        self.protection_mode = 0
+
+        self._prot_btn = QtGui.QPushButton('Enable CSPAD Protection')
+        self._prot_btn.clicked.connect(self.toggle_protection_mode)
+        self._prot_btn.setStyleSheet("background-color: green")
+
+        layout.addWidget(self._prot_btn, 3, 1)
+
+        return
     
         
     def _draw_apply_button(self, layout):
@@ -250,7 +270,7 @@ class TrapdoorWidget(QtGui.QWidget):
         self._apply_btn.clicked.connect(self.apply_parameters)
         self._apply_btn.setStyleSheet("background-color: grey")
         
-        layout.addWidget(self._apply_btn, 3, 1)
+        layout.addWidget(self._apply_btn, 4, 1)
         
         return
     
@@ -261,7 +281,7 @@ class TrapdoorWidget(QtGui.QWidget):
         self._launch_btn.clicked.connect(self._launch_toggle)
         self._launch_btn.setStyleSheet("background-color: green")
         
-        layout.addWidget(self._launch_btn, 4, 1)
+        layout.addWidget(self._launch_btn, 5, 1)
         
         return
     
@@ -318,6 +338,23 @@ class TrapdoorWidget(QtGui.QWidget):
         
     def set_status_text(self, text):
         self._status_text_widget.setText(text)
+        return
+
+
+    def toggle_protection_mode(self):
+
+        if self.protection_mode == 1: # disabling
+            self._prot_btn.setStyleSheet("background-color: green")
+            self._prot_btn.setText('Enable CSPAD Protection')
+            self._send_zmq_message('set_prot_mode', 0)
+            self.protection_mode = 0
+
+        else: # enabling
+            self._prot_btn.setStyleSheet("background-color: red")
+            self._prot_btn.setText('Disable CSPAD Protection')
+            self._send_zmq_message('set_prot_mode', 1)
+            self.protection_mode = 1
+
         return
     
 

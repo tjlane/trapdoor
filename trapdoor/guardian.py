@@ -196,7 +196,7 @@ class CxiGuardian(MapReducer):
         self._adu_thresholds  = []
         self._area_thresholds = []
         
-        self.shutter_control = lambda x : None # placeholder
+        self.shutter_control = ShutterControl(10000, debug_mode=True)
 
         # set key parameters
         self._history_size = history_size
@@ -239,9 +239,10 @@ class CxiGuardian(MapReducer):
         self._adu_thresholds.append(adu_threshold)
         self._area_thresholds.append(area_threshold)
         
-        if is_damage_control:
-            self.shutter_control = ShutterControl(adu_threshold)
-            self._damage_control_index = len(self._monitor_names)
+        if is_damage_control or (name == 'damage'):
+            print 'Setting `%s` as damage control (adu : %s)' % (name, adu_threshold)
+            self._damage_control_index = len(self._monitor_names) - 1
+            self.shutter_control = ShutterControl(self._shutter_threshold)
         
         # initialize buffers
         self._init_history_buffer()
@@ -255,6 +256,11 @@ class CxiGuardian(MapReducer):
                                 dtype=np.int)
 
         return
+
+
+    @property
+    def _shutter_threshold(self):
+        return self._adu_thresholds[self._damage_control_index]
     
     
     def set_monitor_thresholds(self, name, adu_threshold, area_threshold):
@@ -266,14 +272,6 @@ class CxiGuardian(MapReducer):
         self._adu_thresholds[mon_index]  = adu_threshold
         self._area_thresholds[mon_index] = area_threshold
         
-        return
-    
-    
-    def set_damage_adu_threshold(self, threshold):
-        if isinstance(self.shutter_control, ShutterControl):
-            self.shutter_control.threshold = threshold
-        else:
-            raise TypeError('shutter control not initialized')
         return
     
     
@@ -375,9 +373,7 @@ class CxiGuardian(MapReducer):
             
         # also throw in specifics
         stats['hitrates'] = self._history_buffer
-        
-        if isinstance(self.shutter_control, ShutterControl):
-            stats['shutter_control_threshold'] = self.shutter_control.threshold
+        stats['shutter_control_threshold'] = self.shutter_control.threshold
 
         # add stats reported by the MapReduce class (hosts, etc)
         stats.update( super(CxiGuardian, self).stats )
@@ -414,6 +410,9 @@ class CxiGuardian(MapReducer):
             
         elif instructions == 'set_parameters':
             self.set_parameters(content)
+
+        elif instructions == 'set_prot_mode':
+            self.shutter_control.debug_mode = not bool(content)
             
         else:
             raise RuntimeError('Remote message not understood: %s:%s' % (instructions, content))
@@ -446,6 +445,10 @@ class CxiGuardian(MapReducer):
                 self._area_thresholds[i] = v
             elif p_type == 'Saturation':
                 self._adu_thresholds[i] = v
+                if hasattr(self, '_damage_control_index'):
+                    if i == self._damage_control_index:
+                        print 'Updating damage control threshold'
+                        self.shutter_control.threshold = v
             else:
                 raise KeyError('No parameter type: %s. Must be one of'
                                ' {Area,Saturation}' % p_type)

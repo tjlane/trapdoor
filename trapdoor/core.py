@@ -407,8 +407,8 @@ class MapReducer(OnlinePsana):
                  'num_procs'      : MPI_SIZE,
                  'per_proc_rate'  : self.mean_rate,
                  'evts_processed' : self.num_reduced_events,
-                 'hosts'          : self.hosts,
-                 'master_host'    : self.master_host
+                 'hosts'          : None, # self.hosts,
+                 'master_host'    : None    #self.master_host
                 }
 
         return stats
