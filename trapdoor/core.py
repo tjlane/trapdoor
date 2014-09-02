@@ -12,11 +12,6 @@ import socket
 from glob import glob
 import numpy as np
 
-# currently the following line is necessary to ensure the correct mpi4py
-# is used -- at a later date, this will be included in an ana release
-# ---> if you don't include this line, you may get some cryptic error 
-#      about OpenFiber not being able to alloc memory (!)
-sys.path.insert(1,'/reg/common/package/mpi4py/mpi4py-1.3.1/install/lib/python')
 from mpi4py import MPI
 
 import psana
