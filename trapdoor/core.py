@@ -233,7 +233,10 @@ class MapReducer(OnlinePsana):
         self.map = map_func
         self.reduce = reduce_func
         self.action = action_func
-        self._buffer = None
+        
+        # this determines if MPI will communicate with array-specific protocols
+        # which are more efficient (upper case Isend/Irecv), or will pickle 
+        # for communication, which is more general (lower case isend/recv)
         
         if result_buffer != None:
             self._use_array_comm = True
@@ -241,6 +244,8 @@ class MapReducer(OnlinePsana):
             self._buffer = result_buffer
         else:
             self._use_array_comm = False
+            self._result = None
+            self._buffer = None
             
         self.num_reduced_events = 0
         self._analysis_frequency = 20
@@ -331,6 +336,7 @@ class MapReducer(OnlinePsana):
                         self._buffer = COMM.recv(source=MPI.ANY_SOURCE, tag=0)
                     
                     self._result = self.reduce(self._buffer, self._result)
+
                     self.num_reduced_events += 1
                     self.action(self._result)
 
@@ -475,8 +481,3 @@ class MapReducer(OnlinePsana):
             print msg,
         
         return
-    
-
-
-    
-    
