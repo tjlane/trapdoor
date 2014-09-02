@@ -320,8 +320,16 @@ class MapReducer(OnlinePsana):
             
                 req = None 
                 while self.running:
-                    if req: req.Wait()
-                    req = irecv(self._buffer, source=MPI.ANY_SOURCE, tag=0)
+                    
+                    if self._use_array_comm:
+                        # this is basically the same as a "blocking" recv
+                        if req: req.Wait()
+                        req = irecv(self._buffer, source=MPI.ANY_SOURCE, tag=0)
+                    else:
+                        # for whatever reason, mpi4py hasn't implemented the
+                        # irecv hook yet, so use recv (TJL, 9.2.14)
+                        self._buffer = COMM.recv(source=MPI.ANY_SOURCE, tag=0)
+                    
                     self._result = self.reduce(self._buffer, self._result)
                     self.num_reduced_events += 1
                     self.action(self._result)
