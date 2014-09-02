@@ -246,6 +246,7 @@ class MapReducer(OnlinePsana):
             self._buffer = result_buffer
         else:
             self._use_array_comm = False
+            self._result = None
             
         self.num_reduced_events = 0
         self._analysis_frequency = 20
@@ -326,8 +327,12 @@ class MapReducer(OnlinePsana):
                 req = None 
                 while self.running:
                     if req: req.Wait()
-                    req = irecv(self._buffer, source=MPI.ANY_SOURCE, tag=0)
-                    self._result = self.reduce(self._buffer, self._result)
+                    if self._use_array_comm:
+                        req = irecv(self._buffer, source=MPI.ANY_SOURCE, tag=0)
+                        self._result = self.reduce(self._buffer, self._result)
+                    else:
+                        received = irecv(tag=0)
+                        self._result = self.reduce(received, self._result)
                     self.num_reduced_events += 1
                     self.action(self._result)
 
@@ -472,8 +477,3 @@ class MapReducer(OnlinePsana):
             print msg,
         
         return
-    
-
-
-    
-    
