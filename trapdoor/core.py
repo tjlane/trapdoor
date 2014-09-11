@@ -30,6 +30,7 @@ MPI_SIZE = COMM.Get_size()
 
 #ERASE_LINE = '\x1b[1A\x1b[2K\x1b[1A'
 ERASE_LINE = '\x1b[1A\x1b[2K'
+DIETAG = 999
 
 # --------------------------
 
@@ -55,10 +56,14 @@ class OnlinePsana(object):
         print "shutting down (%s)" % msg
 
         if self.role == 'worker':
+            MPI.Finalize()
             sys.exit(0)
 
         if self.role == 'master':
+
             try:
+                for nod_num in range(1, MPI_SIZE):
+                    COMM.isend(0, dest = nod_num, tag = DIETAG)
                 MPI.Finalize()
             except:
                 COMM.Abort(0) # eeek! should take everything down immediately
@@ -284,6 +289,10 @@ class MapReducer(OnlinePsana):
             start_time = time.time()
 
             for evt in self.events:
+
+                if COMM.Iprobe(source = 0, tag = DIETAG):
+                    self.shutdown('Shutting down RANK: %i' % MPI_RANK)
+
                 #print 'Hello, from RANK %d' % MPI_RANK
                 if not evt: continue
 
