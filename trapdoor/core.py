@@ -12,11 +12,6 @@ import socket
 from glob import glob
 import numpy as np
 
-# currently the following line is necessary to ensure the correct mpi4py
-# is used -- at a later date, this will be included in an ana release
-# ---> if you don't include this line, you may get some cryptic error 
-#      about OpenFiber not being able to alloc memory (!)
-sys.path.insert(1,'/reg/common/package/mpi4py/mpi4py-1.3.1/install/lib/python')
 from mpi4py import MPI
 
 import psana
@@ -238,7 +233,10 @@ class MapReducer(OnlinePsana):
         self.map = map_func
         self.reduce = reduce_func
         self.action = action_func
-        self._buffer = None
+        
+        # this determines if MPI will communicate with array-specific protocols
+        # which are more efficient (upper case Isend/Irecv), or will pickle 
+        # for communication, which is more general (lower case isend/recv)
         
         if result_buffer != None:
             self._use_array_comm = True
@@ -246,6 +244,8 @@ class MapReducer(OnlinePsana):
             self._buffer = result_buffer
         else:
             self._use_array_comm = False
+            self._result = None
+            self._buffer = None
             
         self.num_reduced_events = 0
         self._analysis_frequency = 20
@@ -325,9 +325,18 @@ class MapReducer(OnlinePsana):
             
                 req = None 
                 while self.running:
-                    if req: req.Wait()
-                    req = irecv(self._buffer, source=MPI.ANY_SOURCE, tag=0)
+                    
+                    if self._use_array_comm:
+                        # this is basically the same as a "blocking" recv
+                        if req: req.Wait()
+                        req = irecv(self._buffer, source=MPI.ANY_SOURCE, tag=0)
+                    else:
+                        # for whatever reason, mpi4py hasn't implemented the
+                        # irecv hook yet, so use recv (TJL, 9.2.14)
+                        self._buffer = COMM.recv(source=MPI.ANY_SOURCE, tag=0)
+                    
                     self._result = self.reduce(self._buffer, self._result)
+
                     self.num_reduced_events += 1
                     self.action(self._result)
 
@@ -472,8 +481,3 @@ class MapReducer(OnlinePsana):
             print msg,
         
         return
-    
-
-
-    
-    
