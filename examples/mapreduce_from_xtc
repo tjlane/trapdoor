@@ -1,27 +1,51 @@
 #!/usr/bin/env python
 
+"""
+Compute an average CSPAD image (powder pattern)
+"""
+
 # runs 30 & 47 are known to contain ice :)
 
 import sys
-sys.path.append('/reg/neh/home2/tjlane/opt/trapdoor')
-
 import numpy as np
 
-from trapdoor import guardian
+import psana
 from trapdoor import core
 
-cons_thresh = 5
-area_thresh = 10000
 
-# use trapdoor.guardian but inject a new source
 camera_buffer = np.zeros((32, 185, 388), dtype=np.int32)
-cntrl = guardian.ShutterControl(cons_thresh, area_thresh, debug_mode=True)
 
-monitor = core.MapReducer(guardian.binarize, guardian.accumulate_damage, cntrl,
+def reduce_func(update, old):
+    """
+    basic sum
+    """
+    return update + old
+
+
+global camera_src
+camera_src = psana.Source('DetInfo(CxiDs1.0:Cspad.0)')
+
+def map_func(psana_event):
+    cspad = psana_event.get(psana.CsPad.DataV2, camera_src)
+    if cspad != None:
+         image = np.vstack([ cspad.quads(i).data() for i in range(4) ])
+    else:
+         image = np.zeros((32, 185, 388), dtype=np.int)
+    return image
+
+def action_func(image):
+    print np.mean(image)
+    return
+
+
+monitor = core.MapReducer(map_func,
+                          reduce_func,
+                          action_func,
                           result_buffer=camera_buffer,
                           source='exp=cxia4113:run=30')
-monitor.start(verbose=False)
 
+
+monitor.start(verbose=True)
 
 
 
