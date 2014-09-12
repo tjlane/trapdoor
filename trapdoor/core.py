@@ -31,6 +31,7 @@ MPI_SIZE = COMM.Get_size()
 #ERASE_LINE = '\x1b[1A\x1b[2K\x1b[1A'
 ERASE_LINE = '\x1b[1A\x1b[2K'
 DIETAG = 999
+DEADTAG = 1000
 
 # --------------------------
 
@@ -56,19 +57,26 @@ class OnlinePsana(object):
         print "shutting down (%s)" % msg
 
         if self.role == 'worker':
+            self._buffer = COMM.send(dest=0, tag=DEADTAG)
             MPI.Finalize()
             sys.exit(0)
 
         if self.role == 'master':
-
             try:
                 for nod_num in range(1, MPI_SIZE):
                     COMM.isend(0, dest = nod_num, tag = DIETAG)
+                num_shutdown_confirm = 0
+                while True:
+                    if COMM.Iprobe(source=MPI.ANY_SOURCE, tag=0):
+                        self._buffer = COMM.recv(source=MPI.ANY_SOURCE, tag=0)
+                    if COMM.Iprobe(source=MPI.ANY_SOURCE, tag=DEADTAG):
+                        num_shutdown_confirm += 1
+                    if num_shutdown_confirm == MPI_SIZE-1:
+                        break
                 MPI.Finalize()
             except:
                 COMM.Abort(0) # eeek! should take everything down immediately
             sys.exit(0)
-
         return
 
 
