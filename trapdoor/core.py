@@ -31,6 +31,7 @@ MPI_SIZE = COMM.Get_size()
 #ERASE_LINE = '\x1b[1A\x1b[2K\x1b[1A'
 ERASE_LINE = '\x1b[1A\x1b[2K'
 DIETAG = 999
+DEADTAG = 1000
 
 # --------------------------
 
@@ -56,19 +57,26 @@ class OnlinePsana(object):
         print "shutting down (%s)" % msg
 
         if self.role == 'worker':
+            self._buffer = COMM.send(dest=0, tag=DEADTAG)
             MPI.Finalize()
             sys.exit(0)
 
         if self.role == 'master':
-
             try:
                 for nod_num in range(1, MPI_SIZE):
                     COMM.isend(0, dest = nod_num, tag = DIETAG)
+                num_shutdown_confirm = 0
+                while True:
+                    if COMM.Iprobe(source=MPI.ANY_SOURCE, tag=0):
+                        self._buffer = COMM.recv(source=MPI.ANY_SOURCE, tag=0)
+                    if COMM.Iprobe(source=MPI.ANY_SOURCE, tag=DEADTAG):
+                        num_shutdown_confirm += 1
+                    if num_shutdown_confirm == MPI_SIZE-1:
+                        break
                 MPI.Finalize()
             except:
                 COMM.Abort(0) # eeek! should take everything down immediately
             sys.exit(0)
-
         return
 
 
@@ -174,10 +182,10 @@ class OnlinePsana(object):
     
         
     @property
-    def events(self):
+    def psana_source(self):
         print 'Accessing data stream: %s' % self._source_string
         ds = psana.DataSource(self._source_string)
-        return ds.events()
+        return ds
     
     
 class MapReducer(OnlinePsana):
@@ -232,6 +240,13 @@ class MapReducer(OnlinePsana):
         
         self._source = source
        
+        self.offline = False
+        
+        if 'shmem' not in self.source:
+            self.offline = True
+            if not self._source[-4:] == ':idx':
+                self._source = self._source + ':idx'     
+       
         if config_file: 
             self.register_cfg_file(config_file)
         
@@ -257,7 +272,7 @@ class MapReducer(OnlinePsana):
 
         return
 
-        
+            
     def start(self, verbose=False):
         """
         Begin the map-reduce procedure.
@@ -288,26 +303,48 @@ class MapReducer(OnlinePsana):
             
             start_time = time.time()
 
-            for evt in self.events:
 
+            # identify which events this RANK process will analyze
+            # --> when using shared memory, the DAQ/shmem process takes care of
+            #     serving up individual events, but when running offline
+            #     we use XTC random access to iterate through indpt evts
+
+            if self.offline == False:
+                psana_events = self.psana_source.events()
+            else:
+                def psana_events_generator():
+                    # identify which events this RANK will process
+                    for r in self.psana_source.runs():
+                        times = r.times()
+                        mylength = int(np.ceil(len(times)/float(MPI_SIZE-1)))
+                        mytimes = times[(MPI_RANK-1)*mylength:(MPI_RANK)*mylength]
+                        for mt in mytimes:
+                            yield r.event(mt)
+                psana_events = psana_events_generator()
+          
+
+            # loop over events and process each
+            for evt in psana_events:
+                    
                 if COMM.Iprobe(source = 0, tag = DIETAG):
                     self.shutdown('Shutting down RANK: %i' % MPI_RANK)
-
+                
                 #print 'Hello, from RANK %d' % MPI_RANK
                 if not evt: continue
-
+                
                 result = self.map(evt)
-
+                
                 if not type(result) == np.ndarray and self._use_array_comm:
                     raise TypeError('Output of `map_func` must be a numpy array'
                                     ' if `result_buffer` is specified! Got: %s'
                                     '' % type(result))
-
+                
                 # send the mapped event data to the master process
                 if req: req.Wait() # be sure we're not still sending something
                 req = isend(result, dest=0, tag=0)
+                    
                 event_index += 1
-
+                
                 # send the rate of processing to the master process
                 if event_index % self._analysis_frequency == 0:
                     rate = float(self._analysis_frequency) / (time.time() - start_time)
@@ -315,14 +352,14 @@ class MapReducer(OnlinePsana):
                     COMM.isend(rate, dest=0, tag=1)
                     if verbose:
                         print 'RANK %d reporting rate: %.2f' % (MPI_RANK, rate)
-
+                
                 if verbose:
                     if event_index % 100 == 0:
                         print '%d evts processed on RANK %d' % (event_index, MPI_RANK)
-
-                self.worker_extras()
                 
-           
+                self.worker_extras()
+             
+                      
         # master loops continuously, looking for communicated from workers & 
         #     reduces each of those
         elif self.role == 'master':
