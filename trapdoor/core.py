@@ -9,7 +9,6 @@ import sys
 import re
 import time
 import socket
-import math
 from glob import glob
 import numpy as np
 
@@ -245,7 +244,8 @@ class MapReducer(OnlinePsana):
         
         if 'shmem' not in self.source:
             self.offline = True
-            self._source = self._source+':idx'     
+            if not self._source[-4:] == ':idx':
+                self._source = self._source + ':idx'     
        
         if config_file: 
             self.register_cfg_file(config_file)
@@ -272,8 +272,6 @@ class MapReducer(OnlinePsana):
 
         return
 
-
-    
             
     def start(self, verbose=False):
         """
@@ -305,88 +303,62 @@ class MapReducer(OnlinePsana):
             
             start_time = time.time()
 
+
+            # identify which events this RANK process will analyze
+            # --> when using shared memory, the DAQ/shmem process takes care of
+            #     serving up individual events, but when running offline
+            #     we use XTC random access to iterate through indpt evts
+
             if self.offline == False:
-
-                for evt in self.psana_source.events():
-                    
-                    if COMM.Iprobe(source = 0, tag = DIETAG):
-                        self.shutdown('Shutting down RANK: %i' % MPI_RANK)
-                
-                    #print 'Hello, from RANK %d' % MPI_RANK
-                    if not evt: continue
-                
-                    result = self.map(evt)
-                
-                    if not type(result) == np.ndarray and self._use_array_comm:
-                        raise TypeError('Output of `map_func` must be a numpy array'
-                                        ' if `result_buffer` is specified! Got: %s'
-                                        '' % type(result))
-                
-                    # send the mapped event data to the master process
-                    if req: req.Wait() # be sure we're not still sending something
-                    req = isend(result, dest=0, tag=0)
-                    
-                    event_index += 1
-                
-                    # send the rate of processing to the master process
-                    if event_index % self._analysis_frequency == 0:
-                        rate = float(self._analysis_frequency) / (time.time() - start_time)
-                        start_time = time.time()
-                        COMM.isend(rate, dest=0, tag=1)
-                        if verbose:
-                            print 'RANK %d reporting rate: %.2f' % (MPI_RANK, rate)
-                
-                    if verbose:
-                        if event_index % 100 == 0:
-                            print '%d evts processed on RANK %d' % (event_index, MPI_RANK)
-                
-                    self.worker_extras()
-                    
+                psana_events = self.psana_source.events()
             else:
-               
-                for r in self.psana_source.runs():
+                def psana_events_generator():
+                    # identify which events this RANK will process
+                    for r in self.psana_source.runs():
+                        times = r.times()
+                        mylength = int(np.ceil(len(times)/float(MPI_SIZE-1)))
+                        mytimes = times[(MPI_RANK-1)*mylength:(MPI_RANK)*mylength]
+                        for mt in mytimes:
+                            yield r.event(mt)
+                psana_events = psana_events_generator()
+          
 
-                    times = r.times()
-                    mylength = int(math.ceil(len(times)/float(MPI_SIZE-1)))
-                    mytimes= times[(MPI_RANK-1)*mylength:(MPI_RANK)*mylength]
-
-                    for mt in mytimes:
-
-                        evt = r.event(mt)
-                        
-                        if COMM.Iprobe(source = 0, tag = DIETAG):
-                            self.shutdown('Shutting down RANK: %i' % MPI_RANK)
+            # loop over events and process each
+            for evt in psana_events:
                     
-                        #print 'Hello, from RANK %d' % MPI_RANK
-                        if not evt: continue
+                if COMM.Iprobe(source = 0, tag = DIETAG):
+                    self.shutdown('Shutting down RANK: %i' % MPI_RANK)
+                
+                #print 'Hello, from RANK %d' % MPI_RANK
+                if not evt: continue
+                
+                result = self.map(evt)
+                
+                if not type(result) == np.ndarray and self._use_array_comm:
+                    raise TypeError('Output of `map_func` must be a numpy array'
+                                    ' if `result_buffer` is specified! Got: %s'
+                                    '' % type(result))
+                
+                # send the mapped event data to the master process
+                if req: req.Wait() # be sure we're not still sending something
+                req = isend(result, dest=0, tag=0)
                     
-                        result = self.map(evt)
-                    
-                        if not type(result) == np.ndarray and self._use_array_comm:
-                            raise TypeError('Output of `map_func` must be a numpy array'
-                                            ' if `result_buffer` is specified! Got: %s'
-                                            '' % type(result))
-                    
-                        # send the mapped event data to the master process
-                        if req: req.Wait() # be sure we're not still sending something
-                        req = isend(result, dest=0, tag=0)
-                        
-                        event_index += 1
-                    
-                        # send the rate of processing to the master process
-                        if event_index % self._analysis_frequency == 0:
-                            rate = float(self._analysis_frequency) / (time.time() - start_time)
-                            start_time = time.time()
-                            COMM.isend(rate, dest=0, tag=1)
-                            if verbose:
-                                print 'RANK %d reporting rate: %.2f' % (MPI_RANK, rate)
-                    
-                        if verbose:
-                            if event_index % 100 == 0:
-                                print '%d evts processed on RANK %d' % (event_index, MPI_RANK)
-                    
-                        self.worker_extras()
-
+                event_index += 1
+                
+                # send the rate of processing to the master process
+                if event_index % self._analysis_frequency == 0:
+                    rate = float(self._analysis_frequency) / (time.time() - start_time)
+                    start_time = time.time()
+                    COMM.isend(rate, dest=0, tag=1)
+                    if verbose:
+                        print 'RANK %d reporting rate: %.2f' % (MPI_RANK, rate)
+                
+                if verbose:
+                    if event_index % 100 == 0:
+                        print '%d evts processed on RANK %d' % (event_index, MPI_RANK)
+                
+                self.worker_extras()
+             
                       
         # master loops continuously, looking for communicated from workers & 
         #     reduces each of those

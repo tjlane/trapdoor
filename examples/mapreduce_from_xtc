@@ -27,6 +27,8 @@ camera_src = psana.Source('DetInfo(CxiDs1.0:Cspad.0)')
 
 def map_func(psana_event):
     cspad = psana_event.get(psana.CsPad.DataV2, camera_src)
+    id = psana_event.get(psana.EventId)
+    print id.fiducials()
     if cspad != None:
          image = np.vstack([ cspad.quads(i).data() for i in range(4) ])
     else:
@@ -34,7 +36,7 @@ def map_func(psana_event):
     return image
 
 def action_func(image):
-    print np.mean(image)
+    #print np.mean(image)
     return
 
 
